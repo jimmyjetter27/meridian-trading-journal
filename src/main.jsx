@@ -1,0 +1,1518 @@
+import React, { useEffect, useRef, useState } from 'react';
+import { createRoot } from 'react-dom/client';
+import { CandlestickSeries, ColorType, CrosshairMode, createChart, createSeriesMarkers } from 'lightweight-charts';
+import { disclaimer } from '../shared/contracts.js';
+import './styles.css';
+const assets = ['XAUUSD', 'USOIL', 'XAGUSD', 'NAS100'];
+async function call(channel, input) {
+  if (!window.journal) throw Error('Open Meridian in Electron to access your local journal.');
+  const r = await window.journal.call(channel, input);
+  if (!r.ok) throw Object.assign(Error(r.error), { diagnostic: r.diagnostic });
+  return r.data;
+}
+const money = (n, c = 'USD') =>
+  new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: c,
+    maximumFractionDigits: 2,
+  }).format(n || 0);
+const ghsMoney = (n) => new Intl.NumberFormat('en-GH', { style: 'currency', currency: 'GHS', maximumFractionDigits: 2 }).format(n || 0);
+const moneyPairText = (value, currency, fx) => {
+  const primary = money(value, currency);
+  if (currency !== 'USD' || !fx) return primary;
+  const rate = Number(value) < 0 ? fx.ask : fx.bid;
+  return `${primary} · ${ghsMoney(Number(value || 0) * rate)}`;
+};
+function MoneyValue({ value, currency = 'USD', fx }) {
+  return <>{money(value, currency)}{currency === 'USD' && fx && <small className="ghs-equivalent">{ghsMoney(Number(value || 0) * (Number(value) < 0 ? fx.ask : fx.bid))}</small>}</>;
+}
+function playSoftTone() {
+  const AudioContext = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContext) return;
+  const context = new AudioContext();
+  const gain = context.createGain();
+  gain.gain.setValueAtTime(0.0001, context.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.12, context.currentTime + 0.03);
+  gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 1.15);
+  gain.connect(context.destination);
+  [523.25, 659.25].forEach((frequency, index) => {
+    const oscillator = context.createOscillator();
+    oscillator.type = 'sine'; oscillator.frequency.value = frequency;
+    oscillator.connect(gain); oscillator.start(context.currentTime + index * 0.16); oscillator.stop(context.currentTime + 1.2);
+  });
+  setTimeout(() => void context.close(), 1500);
+}
+function speakAlert(message) {
+  if (!window.speechSynthesis) { playSoftTone(); return; }
+  window.speechSynthesis.cancel();
+  const utterance = new SpeechSynthesisUtterance(message);
+  const voices = window.speechSynthesis.getVoices();
+  utterance.voice = voices.find((voice) => /Natural|Online/i.test(voice.name) && voice.lang.startsWith('en')) || voices.find((voice) => voice.lang.startsWith('en')) || null;
+  utterance.rate = 0.92; utterance.pitch = 1; utterance.volume = 0.85;
+  window.speechSynthesis.speak(utterance);
+}
+const previewAlert = (mode) => {
+  const message = 'XAUUSD price has moved up 25 points. Your target has been reached.';
+  if (mode === 'voice') speakAlert(message); else playSoftTone();
+};
+function Field({ label, children, ...props }) {
+  return (
+    <label className="field">
+      <span>{label}</span>
+      {children || <input {...props} />}
+    </label>
+  );
+}
+function Modal({ title, onClose, children }) {
+  return (
+    <div className="overlay" onClick={onClose}>
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        className="modal"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between mb-6">
+          <h2>{title}</h2>
+          <button aria-label="Close dialog" onClick={onClose}>
+            ✕
+          </button>
+        </div>
+        {children}
+      </section>
+    </div>
+  );
+}
+const number = (value, digits = 2) =>
+  value == null ? '—' : Number(value).toLocaleString('en-US', { maximumFractionDigits: digits });
+
+function ActiveTrades({ account, onError, fx }) {
+  const [snapshot, setSnapshot] = useState(null);
+  const [selectedPosition, setSelectedPosition] = useState(null);
+  const [loading, setLoading] = useState(false);
+  async function load() {
+    if (!account) return;
+    try {
+      setLoading(true);
+      setSnapshot(await call('mt5:positions', account.id));
+    } catch (error) {
+      onError(error);
+    } finally {
+      setLoading(false);
+    }
+  }
+  useEffect(() => {
+    setSnapshot(null);
+    if (!account) return;
+    load();
+    const timer = setInterval(load, 5000);
+    return () => clearInterval(timer);
+  }, [account?.id]);
+  const positions = snapshot?.positions || [];
+  return (
+    <>
+      <section className="panel live-summary">
+        <div>
+          <div className="live-indicator"><span /> LIVE FROM MT5</div>
+          <h2>{positions.length} active {positions.length === 1 ? 'trade' : 'trades'}</h2>
+          <p className="muted mt-2">{account ? `${account.display_name} · ${account.server_name}` : 'Select an account above.'}</p>
+        </div>
+        <div className="live-totals">
+          <small>Floating P&amp;L</small>
+          <strong className={(positions.reduce((sum, p) => sum + p.current_pnl, 0)) < 0 ? 'negative' : 'positive'}>
+            <MoneyValue value={positions.reduce((sum, p) => sum + p.current_pnl, 0)} currency={snapshot?.currency || account?.base_currency} fx={fx} />
+          </strong>
+          <button onClick={load} disabled={!account || loading}>{loading ? 'Refreshing…' : '↻ Refresh'}</button>
+        </div>
+      </section>
+      <section className="panel table-panel">
+        <div className="table-heading"><div><h2>Open positions</h2><p className="muted text-xs mt-2">Click any row for full position details.</p></div><small className="muted">Auto-refreshes every 5 seconds</small></div>
+        <div className="table-scroll">
+          <table><thead><tr><th>Opened / ticket</th><th>Symbol</th><th>Side</th><th>Lots</th><th>Entry</th><th>Current</th><th>Spread</th><th>Floating P&amp;L</th></tr></thead>
+            <tbody>{positions.map((p) => <tr key={p.position_id} onClick={() => setSelectedPosition(p)}>
+              <td>{new Date(p.open_time).toLocaleString()}<small>#{p.position_id}</small></td>
+              <td className="font-semibold">{p.standard_symbol}<small>{p.symbol}</small></td>
+              <td><span className={p.type === 'BUY' ? 'buy' : 'sell'}>{p.type}</span></td><td>{p.lots}</td>
+              <td>{number(p.entry, 6)}</td><td>{number(p.current_price, 6)}</td><td>{number(p.spread_points, 1)} pts</td>
+              <td className={p.current_pnl < 0 ? 'negative' : 'positive'}><MoneyValue value={p.current_pnl} currency={snapshot?.currency} fx={fx} /></td>
+            </tr>)}</tbody></table>
+          {!loading && account && !positions.length && <div className="empty-table">No open positions on this MT5 account.</div>}
+          {!account && <div className="empty-table">Select an account from the top bar to view its open positions.</div>}
+        </div>
+      </section>
+      {selectedPosition && <Modal title={`${selectedPosition.standard_symbol} · position #${selectedPosition.position_id}`} onClose={() => setSelectedPosition(null)}>
+        <dl className="review position-review">{Object.entries({
+          'Side': selectedPosition.type, 'Opened': new Date(selectedPosition.open_time).toLocaleString(), 'Broker symbol': selectedPosition.symbol,
+          'Volume': `${selectedPosition.lots} lots`, 'Entry price': number(selectedPosition.entry, 6), 'Current price': number(selectedPosition.current_price, 6),
+          'Take profit': selectedPosition.take_profit ? number(selectedPosition.take_profit, 6) : 'Not set', 'Stop loss': selectedPosition.stop_loss ? number(selectedPosition.stop_loss, 6) : 'Not set',
+          'Bid / Ask': `${number(selectedPosition.bid, 6)} / ${number(selectedPosition.ask, 6)}`, 'Current spread': `${number(selectedPosition.spread_points, 1)} points`,
+          'Price movement': `${number(selectedPosition.points_pnl, 1)} points`, 'Floating P&L': moneyPairText(selectedPosition.current_pnl, snapshot?.currency, fx),
+          'Swap': moneyPairText(selectedPosition.swap, snapshot?.currency, fx), 'Comment': selectedPosition.comment || '—',
+        }).map(([key, value]) => <React.Fragment key={key}><dt>{key}</dt><dd>{value}</dd></React.Fragment>)}</dl>
+      </Modal>}
+    </>
+  );
+}
+
+function PriceChart({ candles, markers }) {
+  const container = useRef(null);
+  useEffect(() => {
+    if (!container.current || !candles.length) return;
+    const chart = createChart(container.current, {
+      autoSize: true,
+      layout: { background: { type: ColorType.Solid, color: '#0b1119' }, textColor: '#8795a8', attributionLogo: true },
+      grid: { vertLines: { color: '#17212d' }, horzLines: { color: '#17212d' } },
+      crosshair: { mode: CrosshairMode.Normal, vertLine: { color: '#566679' }, horzLine: { color: '#566679' } },
+      rightPriceScale: { borderColor: '#283443' }, timeScale: { borderColor: '#283443', timeVisible: true, secondsVisible: false },
+    });
+    const series = chart.addSeries(CandlestickSeries, { upColor: '#57d6ad', downColor: '#ef6b81', borderVisible: false, wickUpColor: '#57d6ad', wickDownColor: '#ef6b81' });
+    series.setData(candles);
+    createSeriesMarkers(series, markers.map(({ detail, ...marker }) => marker));
+    const markerMap = new Map(markers.map((marker) => [String(marker.time), marker]));
+    const tooltip = document.createElement('div');
+    tooltip.className = 'trade-tooltip';
+    container.current.appendChild(tooltip);
+    const move = (param) => {
+      const marker = param.time ? markerMap.get(String(param.time)) : null;
+      if (!marker || !param.point) { tooltip.style.display = 'none'; return; }
+      tooltip.style.display = 'block';
+      tooltip.replaceChildren();
+      for (const [tag, value, className] of [
+        ['b', marker.detail.title, ''], ['span', marker.detail.time, ''],
+        ['span', marker.detail.price, ''], ['span', marker.detail.lots, ''],
+        ['strong', marker.detail.pnl, marker.detail.negative ? 'negative' : 'positive'],
+      ]) {
+        const line = document.createElement(tag);
+        line.textContent = value;
+        if (className) line.className = className;
+        tooltip.appendChild(line);
+      }
+      tooltip.style.left = `${Math.min(param.point.x + 14, container.current.clientWidth - 225)}px`;
+      tooltip.style.top = `${Math.max(12, param.point.y - 72)}px`;
+    };
+    chart.subscribeCrosshairMove(move);
+    chart.timeScale().fitContent();
+    return () => { chart.unsubscribeCrosshairMove(move); chart.remove(); };
+  }, [candles, markers]);
+  return <div className="price-chart" ref={container} />;
+}
+
+function ReturnsView({ accountId, broker, accounts, scopeValue, onScopeChange, fx, onError }) {
+  const [granularity, setGranularity] = useState('daily');
+  const [result, setResult] = useState({ periods: [], currency: 'USD', mixed: false });
+  const [loading, setLoading] = useState(false);
+  useEffect(() => {
+    let current = true;
+    (async () => {
+      try {
+        setLoading(true);
+        const value = await call('returns:read', { account: accountId, broker, granularity });
+        if (current) setResult(value);
+      } catch (error) { if (current) onError(error); }
+      finally { if (current) setLoading(false); }
+    })();
+    return () => { current = false; };
+  }, [accountId, broker, granularity]);
+  const periods = result.periods || [];
+  const recent = periods.slice(-30);
+  const max = Math.max(1, ...recent.map((period) => Math.abs(period.return_pct || 0)));
+  const latest = periods.at(-1);
+  const valid = periods.filter((period) => period.return_pct != null);
+  const average = valid.length ? valid.reduce((sum, period) => sum + period.return_pct, 0) / valid.length : null;
+  const label = (key) => granularity === 'weekly' ? `Week of ${new Date(`${key}T12:00:00Z`).toLocaleDateString()}` : granularity === 'monthly' ? new Date(`${key}-01T12:00:00Z`).toLocaleDateString(undefined, { month: 'long', year: 'numeric' }) : granularity === 'yearly' ? key : new Date(`${key}T12:00:00Z`).toLocaleDateString();
+  return <>
+    <section className="panel returns-controls">
+      <div><h2>Return on capital</h2><p className="muted text-xs mt-2">Each percentage uses the capital available at the beginning of that period.</p></div>
+      <div className="flex gap-3">
+        <select value={scopeValue} onChange={(event) => onScopeChange(event.target.value)} aria-label="Returns account scope"><option value="active">Active MT5 account</option><option value="all">All accounts</option>{accounts.map((account) => <option key={account.id} value={String(account.id)}>{account.display_name}</option>)}</select>
+        <select value={granularity} onChange={(event) => setGranularity(event.target.value)} aria-label="Return period"><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option><option value="yearly">Yearly</option></select>
+      </div>
+    </section>
+    {result.mixed ? <p className="notice mt-4">Select accounts with the same base currency. Meridian does not combine percentage returns across currencies.</p> : <>
+      <div className="metrics returns-metrics">
+        <section className="metric"><div className="metric-label">Latest period</div><strong className={(latest?.return_pct || 0) < 0 ? 'negative' : 'positive'}>{latest?.return_pct == null ? '—' : `${latest.return_pct.toFixed(2)}%`}</strong><small>{latest ? label(latest.key) : 'No closed trades'}</small></section>
+        <section className="metric"><div className="metric-label">Average period</div><strong className={(average || 0) < 0 ? 'negative' : 'positive'}>{average == null ? '—' : `${average.toFixed(2)}%`}</strong><small>{valid.length} measured periods</small></section>
+        <section className="metric"><div className="metric-label">Current capital</div><strong><MoneyValue value={result.current_capital ?? 0} currency={result.currency} fx={fx} /></strong><small>Latest balance reported by MT5</small></section>
+      </div>
+      <section className="panel returns-chart-panel"><h2>{granularity[0].toUpperCase() + granularity.slice(1)} returns</h2><div className="returns-bars">{recent.map((period) => <div className="return-bar-column" key={period.key} title={`${label(period.key)}: ${period.return_pct?.toFixed(2) ?? '—'}%`}><span>{period.return_pct == null ? '—' : `${period.return_pct.toFixed(1)}%`}</span><div className="return-bar-track"><i className={period.return_pct < 0 ? 'negative-bar' : 'positive-bar'} style={{ height: `${Math.max(3, Math.abs(period.return_pct || 0) / max * 100)}%` }} /></div><small>{period.key}</small></div>)}</div>{!periods.length && <div className="empty-table">{loading ? 'Calculating returns…' : 'No closed trades are available for this account selection.'}</div>}</section>
+      <section className="panel table-panel"><div className="table-heading"><div><h2>Period breakdown <span className="count">{periods.length}</span></h2><p className="muted text-xs mt-2">Opening capital is reconstructed from the MT5 balance at the start of each period. Deposits and withdrawals do not count as returns.</p></div></div><div className="table-scroll"><table><thead><tr><th>Period</th><th>Opening capital</th><th>Realized P&amp;L / return</th><th>Deposits / withdrawals</th><th>Closing capital</th><th>Trades</th></tr></thead><tbody>{[...periods].reverse().slice(0, 500).map((period) => <tr key={period.key}><td>{label(period.key)}</td><td><MoneyValue value={period.opening_capital} currency={result.currency} fx={fx} /></td><td className={period.pnl < 0 ? 'negative' : 'positive'}><MoneyValue value={period.pnl} currency={result.currency} fx={fx} /> <small>({period.return_pct == null ? '—' : `${period.return_pct.toFixed(2)}%`})</small></td><td><MoneyValue value={period.capital_flow} currency={result.currency} fx={fx} /></td><td><MoneyValue value={period.closing_capital} currency={result.currency} fx={fx} /></td><td>{period.trade_count}</td></tr>)}</tbody></table></div></section>
+    </>}
+  </>;
+}
+
+function TradeChart({ account, mappings, onError, fx }) {
+  const accountAssets = [...new Set(mappings.filter((m) => !account || m.broker_name === account.broker_name).map((m) => m.standard_symbol))];
+  const [asset, setAsset] = useState('XAUUSD');
+  const [timeframe, setTimeframe] = useState('M15');
+  const [range, setRange] = useState('7');
+  const [chartData, setChartData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [showTrades, setShowTrades] = useState(true);
+  const [replay, setReplay] = useState(false);
+  const [replayIndex, setReplayIndex] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const [replaySpeed, setReplaySpeed] = useState('1');
+  useEffect(() => { if (accountAssets.length && !accountAssets.includes(asset)) setAsset(accountAssets[0]); }, [account?.id, mappings.length]);
+  useEffect(() => {
+    if (!account || !asset) return;
+    let current = true;
+    (async () => {
+      setLoading(true);
+      try {
+        const dateTo = new Date();
+        const dateFrom = range === 'all' ? new Date('2000-01-01T00:00:00.000Z') : new Date(dateTo.getTime() - Number(range) * 86400000);
+        const result = await call('mt5:chart', { account_id: account.id, asset, timeframe, date_from: dateFrom.toISOString(), date_to: dateTo.toISOString() });
+        if (current) { setChartData(result); setReplay(false); setPlaying(false); setReplayIndex(0); }
+      } catch (error) { if (current) onError(error); } finally { if (current) setLoading(false); }
+    })();
+    return () => { current = false; };
+  }, [account?.id, asset, timeframe, range]);
+  const candles = chartData?.candles || [];
+  useEffect(() => {
+    if (!replay || !playing || !candles.length) return;
+    const timer = setInterval(() => setReplayIndex((index) => {
+      if (index >= candles.length) { setPlaying(false); return candles.length; }
+      return index + 1;
+    }), { '0.5': 1400, '1': 750, '2': 375, '5': 150 }[replaySpeed]);
+    return () => clearInterval(timer);
+  }, [replay, playing, replaySpeed, candles.length]);
+  const interval = { M1: 60, M5: 300, M15: 900, H1: 3600, H4: 14400, D1: 86400 }[timeframe];
+  const times = new Set(candles.map((c) => c.time));
+  const snap = (iso) => { const raw = Math.floor(new Date(iso).getTime() / 1000 / interval) * interval; if (times.has(raw)) return raw; return candles.reduce((best, c) => Math.abs(c.time - raw) < Math.abs(best - raw) ? c.time : best, candles[0]?.time || raw); };
+  const visibleTrades = (chartData?.trades || []).filter((t) => candles.length && new Date(t.open_time).getTime() / 1000 >= candles[0].time && new Date(t.close_time).getTime() / 1000 <= candles.at(-1).time);
+  const markers = visibleTrades.flatMap((t) => [
+    { time: snap(t.open_time), position: t.type === 'BUY' ? 'belowBar' : 'aboveBar', color: t.type === 'BUY' ? '#57d6ad' : '#ef6b81', shape: t.type === 'BUY' ? 'arrowUp' : 'arrowDown', text: `${t.type} ${t.lot_size}`, detail: { title: `${t.type} entry · #${t.ticket_number}`, time: new Date(t.open_time).toLocaleString(), price: `Entry ${number(t.open_price, 6)}`, lots: `${t.lot_size} lots`, pnl: moneyPairText(t.net_pnl, t.base_currency, fx), negative: t.net_pnl < 0 } },
+    { time: snap(t.close_time), position: t.type === 'BUY' ? 'aboveBar' : 'belowBar', color: t.net_pnl < 0 ? '#ef6b81' : '#57d6ad', shape: 'circle', text: 'Exit', detail: { title: `Exit · #${t.ticket_number}`, time: new Date(t.close_time).toLocaleString(), price: `Exit ${number(t.close_price, 6)}`, lots: `${t.lot_size} lots`, pnl: moneyPairText(t.net_pnl, t.base_currency, fx), negative: t.net_pnl < 0 } },
+  ]).sort((a, b) => a.time - b.time);
+  const displayedCandles = replay ? candles.slice(0, Math.max(1, replayIndex)) : candles;
+  const lastDisplayedTime = displayedCandles.at(-1)?.time || 0;
+  const displayedMarkers = showTrades ? markers.filter((marker) => marker.time <= lastDisplayedTime) : [];
+  const startReplay = () => {
+    const start = Math.min(candles.length, Math.max(20, Math.floor(candles.length * 0.15)));
+    setReplayIndex(start); setReplay(true); setPlaying(false);
+  };
+  return <section className="panel market-chart-panel">
+    <div className="chart-toolbar"><div><h2>{asset || 'Trade'} chart</h2><p className="muted text-xs mt-2">Live broker candles with journal entry and exit markers.</p></div><div className="flex gap-3">
+      <select value={asset} onChange={(e) => setAsset(e.target.value)} aria-label="Chart asset">{accountAssets.map((name) => <option key={name}>{name}</option>)}</select>
+      <select value={timeframe} onChange={(e) => setTimeframe(e.target.value)} aria-label="Chart timeframe">{['M1','M5','M15','H1','H4','D1'].map((name) => <option key={name}>{name}</option>)}</select>
+      <select value={range} onChange={(e) => { setRange(e.target.value); if (e.target.value === 'all') setTimeframe('D1'); }} aria-label="Chart range"><option value="1">1 day</option><option value="7">1 week</option><option value="30">1 month</option><option value="90">3 months</option><option value="365">1 year</option><option value="all">All history</option></select>
+    </div></div>
+    {candles.length > 0 && <div className="chart-actions">
+      <button className={showTrades ? 'chart-action active' : 'chart-action'} onClick={() => setShowTrades((shown) => !shown)}>{showTrades ? '◉ Trades shown' : '○ Trades hidden'}</button>
+      {!replay ? <button className="chart-action" onClick={startReplay}>▶ Start replay</button> : <>
+        <button className="chart-action active" onClick={() => setPlaying((value) => !value)}>{playing ? 'Ⅱ Pause' : '▶ Play'}</button>
+        <button className="chart-action" onClick={() => setReplayIndex((index) => Math.min(candles.length, index + 1))}>Step +1</button>
+        <select value={replaySpeed} onChange={(e) => setReplaySpeed(e.target.value)} aria-label="Replay speed"><option value="0.5">0.5×</option><option value="1">1×</option><option value="2">2×</option><option value="5">5×</option></select>
+        <button className="chart-action" onClick={() => { setReplay(false); setPlaying(false); }}>Exit replay</button>
+      </>}
+    </div>}
+    {replay && candles.length > 0 && <div className="replay-timeline"><input type="range" min="1" max={candles.length} value={Math.max(1, replayIndex)} onChange={(e) => { setReplayIndex(Number(e.target.value)); setPlaying(false); }} aria-label="Replay position" /><span>{replayIndex} / {candles.length} candles · {new Date((displayedCandles.at(-1)?.time || 0) * 1000).toLocaleString()}</span></div>}
+    {!account ? <div className="empty-chart"><h3>Select an account to open its chart.</h3></div> : loading && !candles.length ? <div className="empty-chart"><h3>Loading candles from MT5…</h3></div> : candles.length ? <><PriceChart candles={displayedCandles} markers={displayedMarkers} /><div className="chart-footer"><span>{showTrades ? <><i className="legend-dot entry" /> Entry <i className="legend-dot exit" /> Exit</> : 'Trade markers are hidden'}</span><span>{replay ? 'Replay mode · future candles hidden' : `${visibleTrades.length} completed trades in view · Hover a marker for details`}</span></div></> : <div className="empty-chart"><h3>No candle data in this period.</h3><p>Try a wider range or timeframe.</p></div>}
+    <p className="chart-attribution">Charts by TradingView Lightweight Charts™</p>
+  </section>;
+}
+function localDateKey(date = new Date()) {
+  const offset = date.getTimezoneOffset() * 60000;
+  return new Date(date.getTime() - offset).toISOString().slice(0, 10);
+}
+function DailyJournal({ account, entries, trades, fx, onSave }) {
+  const [date, setDate] = useState(localDateKey());
+  const entry = entries.find((item) => item.account_id === account?.id && item.entry_date === date);
+  const dayTrades = trades.filter((trade) => trade.account_id === account?.id && localDateKey(new Date(trade.close_time)) === date);
+  const dayPnl = dayTrades.reduce((sum, trade) => sum + trade.net_pnl, 0);
+  return <div className="daily-grid">
+    <section className="panel daily-editor">
+      <div className="table-heading"><div><h2>Daily reflection</h2><p className="muted text-xs mt-2">Capture the market context and the decisions behind the result.</p></div><input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></div>
+      <div className="day-result"><span>{dayTrades.length} closed trades</span><strong className={dayPnl < 0 ? 'negative' : 'positive'}><MoneyValue value={dayPnl} currency={account?.base_currency} fx={fx} /></strong></div>
+      {!account ? <div className="empty-table">Select an account before writing a daily entry.</div> : <form key={`${date}-${entry?.updated_at || 'new'}`} onSubmit={(event) => {
+        event.preventDefault(); const values = Object.fromEntries(new FormData(event.currentTarget));
+        onSave({ account_id: account.id, entry_date: date, session: values.session, mood: values.mood, behavior_tags: values.behaviors.split(',').map((tag) => tag.trim()).filter(Boolean), market_context: values.context, reflection: values.reflection, next_session_rule: values.rule });
+      }} className="daily-form">
+        <div className="form-grid"><Field label="Trading session"><select name="session" defaultValue={entry?.session || 'Asia'}><option>Asia</option><option>London</option><option>New York</option><option>Multiple sessions</option><option>Did not trade</option></select></Field>
+        <Field label="Emotional state"><select name="mood" defaultValue={entry?.mood || 'Frustrated'}><option>Calm</option><option>Focused</option><option>Confident</option><option>Anxious</option><option>Frustrated</option><option>Angry</option><option>Fatigued</option><option>Overconfident</option></select></Field></div>
+        <Field label="Behavior tags (comma separated)" name="behaviors" defaultValue={entry ? JSON.parse(entry.behavior_tags).join(', ') : ''} placeholder="Rushed entry, Revenge trading, FOMO" />
+        <Field label="Market context"><textarea name="context" rows="3" defaultValue={entry?.market_context || ''} placeholder="Holiday conditions, session liquidity, major news…" /></Field>
+        <Field label="What happened and why?"><textarea name="reflection" rows="5" defaultValue={entry?.reflection || ''} placeholder="Describe the sequence of decisions without judging yourself." /></Field>
+        <Field label="Rule for the next session"><textarea name="rule" rows="3" defaultValue={entry?.next_session_rule || ''} placeholder="A specific action you can follow before the next trade." /></Field>
+        <button className="primary">Save daily reflection</button>
+      </form>}
+    </section>
+    <section className="panel daily-history"><h2>Recent entries</h2><p className="muted text-xs mt-2">Select a day to review or update it.</p>
+      <div className="daily-list">{entries.filter((item) => item.account_id === account?.id).map((item) => <button key={item.id} className={item.entry_date === date ? 'daily-card selected' : 'daily-card'} onClick={() => setDate(item.entry_date)}><span><b>{new Date(`${item.entry_date}T12:00:00`).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}</b><small>{item.session} · {item.mood}</small></span><span className="tag-count">{JSON.parse(item.behavior_tags).length} tags</span></button>)}</div>
+      {!entries.some((item) => item.account_id === account?.id) && <div className="empty-table">Your saved daily reflections will appear here.</div>}
+    </section>
+  </div>;
+}
+
+export function OrderConfirmation({ order, busy, onConfirm, onCancel, fx }) {
+  const [left, setLeft] = useState(0);
+  useEffect(() => {
+    const update = () => setLeft(Math.max(0, Math.ceil((order.expires_at - Date.now()) / 1000)));
+    update();
+    const timer = setInterval(update, 250);
+    return () => clearInterval(timer);
+  }, [order]);
+  return (
+    <Modal
+      title={order.action === 'close' ? 'Confirm position closure' : 'Review your order'}
+      onClose={() => !busy && onCancel()}
+    >
+      <p className="muted mb-5">
+        Review every detail. This instruction will be sent to your connected MT5 terminal.
+      </p>
+      <dl className="review">
+        {Object.entries({
+          'Account name': order.account,
+          Broker: order.broker,
+          'Exact symbol': order.symbol,
+          Instruction: `${order.type} · ${order.kind}`,
+          'Total lot risk': `${order.lots} lots`,
+          'Stop loss': order.stop_loss || 'Not set on position',
+          'Entry reference': order.entry || 'Close at market',
+          'Estimated loss at stop':
+            order.estimated_risk === null
+              ? 'Not available for closure'
+              : moneyPairText(order.estimated_risk, order.currency, fx),
+          Position: order.position_id || 'New order',
+        }).map(([k, v]) => (
+          <React.Fragment key={k}>
+            <dt>{k}</dt>
+            <dd>{v}</dd>
+          </React.Fragment>
+        ))}
+      </dl>
+      <p className="notice mt-5">
+        Stop-loss estimates exclude gaps, slippage, commissions, and fees. A stop loss does not
+        guarantee the fill price.
+      </p>
+      <div className="flex justify-end gap-3 mt-6">
+        <button onClick={onCancel} disabled={busy}>
+          Cancel
+        </button>
+        <button className="primary" disabled={busy || !left} onClick={onConfirm}>
+          {busy
+            ? 'Transmitting…'
+            : left
+              ? `Confirm ${order.action === 'close' ? 'closure' : 'order'} · ${left}s`
+              : 'Quote expired'}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+function App() {
+  const [data, setData] = useState({
+      accounts: [],
+      trades: [],
+      metrics: {},
+      mappings: [],
+      logs: [],
+      dailyEntries: [],
+      priceAlerts: [],
+      alertMode: 'tone',
+    }),
+    [filters, setFilters] = useState({}),
+    [accountScope, setAccountScope] = useState('active'),
+    [datePreset, setDatePreset] = useState('all'),
+    [tab, setTab] = useState('Overview'),
+    [settings, setSettings] = useState(false),
+    [error, setError] = useState(''),
+    [toast, setToast] = useState(''),
+    [diagnostic, setDiagnostic] = useState(null),
+    [confirmation, setConfirmation] = useState(null),
+    [busy, setBusy] = useState(false),
+    [search, setSearch] = useState(''),
+    [sort, setSort] = useState({ key: 'close_time', asc: false }),
+    [selected, setSelected] = useState(null),
+    [report, setReport] = useState(null);
+  const [fx, setFx] = useState(null);
+  async function refresh() {
+    setData(await call('journal:read', filters));
+  }
+  function fail(e) {
+    setError(e.message);
+    if (
+      e.diagnostic &&
+      ['10014', '10017', '10026', '10027', 'BRIDGE_TIMEOUT', 'ERR_TRADE_SEND_FAILED'].includes(
+        e.diagnostic.code,
+      )
+    )
+      setDiagnostic(e.diagnostic);
+  }
+  async function task(fn) {
+    setError('');
+    try {
+      await fn();
+    } catch (e) {
+      fail(e);
+    }
+  }
+  useEffect(() => {
+    task(refresh);
+  }, [filters]);
+  useEffect(() => window.journal?.onStatus((status) => setData((d) => ({ ...d, status }))), []);
+  useEffect(() => window.journal?.onPriceAlert((alert) => {
+    if (data.alertMode === 'voice') speakAlert(alert.message); else playSoftTone();
+    setToast(alert.message);
+    void refresh();
+  }), [data.alertMode]);
+  useEffect(() => window.journal?.onJournalChanged((change) => {
+    if (accountScope === 'active') setFilters((current) => ({ ...current, account: change.account_id, broker: undefined }));
+    else void task(refresh);
+  }), [accountScope, filters]);
+  const active = data.accounts.find((a) => a.id === data.activeAccount),
+    m = data.metrics;
+  useEffect(() => {
+    if (accountScope === 'active' && data.activeAccount && filters.account !== data.activeAccount)
+      setFilters((current) => ({ ...current, account: data.activeAccount, broker: undefined }));
+  }, [accountScope, data.activeAccount]);
+  const journalTab = tab === 'Overview' || tab === 'Trade journal';
+  function setDateRange(preset) {
+    setDatePreset(preset);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    let since;
+    let until;
+    if (preset === 'today') since = today;
+    if (preset === 'yesterday') {
+      since = new Date(today.getTime() - 86400000);
+      until = today;
+    }
+    const days = { week: 7, '30': 30, '90': 90, '365': 365 }[preset];
+    if (days) since = new Date(Date.now() - days * 86400000);
+    setFilters((f) => ({ ...f, since: since?.toISOString(), until: until?.toISOString() }));
+  }
+  function changeAccountScope(value) {
+    if (value === 'active') { setAccountScope('active'); setFilters((current) => ({ ...current, account: data.activeAccount || undefined, broker: undefined })); }
+    else if (value === 'all') { setAccountScope('all'); setFilters((current) => ({ ...current, account: undefined, broker: undefined })); }
+    else { setAccountScope('specific'); setFilters((current) => ({ ...current, account: Number(value), broker: undefined })); }
+  }
+  useEffect(() => {
+    if (!active || active.base_currency !== 'USD') { setFx(null); return; }
+    let mounted = true;
+    const loadRate = async () => {
+      try { const rate = await call('mt5:fx-rate', { account_id: active.id, quote: 'GHS' }); if (mounted) setFx(rate); } catch { if (mounted) setFx(null); }
+    };
+    loadRate();
+    const timer = setInterval(loadRate, 60000);
+    return () => { mounted = false; clearInterval(timer); };
+  }, [active?.id, active?.base_currency]);
+  async function importFile(file) {
+    if (!file) return;
+    if (!active) throw Error('Select an account from the top dropdown before importing.');
+    if (file.size > 20000000) throw Error('CSV must be under 20 MB');
+    setReport(await call('csv:import', { text: await file.text(), account_id: active.id }));
+    await refresh();
+  }
+  async function prepare(e, action) {
+    e.preventDefault();
+    const f = Object.fromEntries(new FormData(e.currentTarget));
+    const order =
+      action === 'close'
+        ? { position_id: f.position_id }
+        : {
+            asset: f.asset,
+            type: f.type,
+            kind: f.kind,
+            lots: Number(f.lots),
+            stop_loss: Number(f.stop_loss),
+            ...(f.price ? { price: Number(f.price) } : {}),
+          };
+    await task(async () => setConfirmation(await call('trade:prepare', { action, order })));
+  }
+  async function confirm() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const r = await call(
+        confirmation.action === 'close' ? 'trade:close-position' : 'trade:place-order',
+        confirmation.token,
+      );
+      setConfirmation(null);
+      if (!r.ok) setDiagnostic(r.diagnostic);
+      else setToast('MT5 acknowledged the instruction. Check the execution log for its result.');
+      await refresh();
+    } catch (e) {
+      fail(e);
+      setConfirmation(null);
+    } finally {
+      setBusy(false);
+    }
+  }
+  const trades = data.trades
+    .filter((t) =>
+      `${t.standard_symbol} ${t.ticket_number} ${t.display_name}`
+        .toLowerCase()
+        .includes(search.toLowerCase()),
+    )
+    .sort(
+      (a, b) =>
+        (a[sort.key] > b[sort.key] ? 1 : a[sort.key] < b[sort.key] ? -1 : 0) * (sort.asc ? 1 : -1),
+    );
+  const curve = [...data.trades].reverse().reduce(
+    (arr, t) => {
+      arr.push((arr.at(-1) || 0) + t.net_pnl);
+      return arr;
+    },
+    [0],
+  );
+  const lo = curve.reduce((a, n) => Math.min(a, n), 0),
+    hi = curve.reduce((a, n) => Math.max(a, n), 0),
+    range = hi - lo || 1;
+  const points = curve
+    .map((n, i) => `${(i / Math.max(curve.length - 1, 1)) * 900},${150 - ((n - lo) / range) * 125}`)
+    .join(' ');
+  return (
+    <div className="app-shell">
+      <aside className="sidebar">
+        <div className="brand">
+          <span className="brand-mark">m</span> meridian<span className="brand-dot">.</span>
+        </div>
+        <div className="workspace-label">PERSONAL WORKSPACE</div>
+        <nav>
+          {['Overview', 'Trade journal', 'Returns', 'Daily journal', 'Active trades', 'Trade chart', 'Execution'].map((name, i) => (
+            <button
+              key={name}
+              className={tab === name ? 'nav active' : 'nav'}
+              onClick={() => setTab(name)}
+            >
+              <span>{['◫', '☷', '%', '✎', '●', '⌁', '⇄'][i]}</span>
+              {name}
+            </button>
+          ))}
+        </nav>
+        <div className="workspace-label mt-8">BROKER ACCOUNTS</div>
+        {[
+          'All',
+          ...new Set(['Exness', 'XM', 'Vantage', ...data.accounts.map((a) => a.broker_name)]),
+        ].map((broker, i) => (
+          <button
+            key={broker}
+            className={`nav ${(!filters.broker && i === 0) || filters.broker === broker ? 'selected' : ''}`}
+            onClick={() =>
+              (setAccountScope('all'), setFilters((f) => ({ ...f, broker: i ? broker : undefined, account: undefined })))
+            }
+          >
+            <span className={`broker-dot dot-${i % 4}`} />
+            {broker === 'All' ? 'All accounts' : broker}
+            <small>
+              {broker === 'All'
+                ? data.accounts.length
+                : data.accounts.filter((a) => a.broker_name === broker).length}
+            </small>
+          </button>
+        ))}
+        <div className="workspace-label mt-8">WATCH YOUR EDGE</div>
+        {['All assets', ...assets].map((asset, i) => (
+          <button
+            key={asset}
+            className={`nav ${(!filters.asset && !i) || filters.asset === asset ? 'selected' : ''}`}
+            onClick={() => setFilters((f) => ({ ...f, asset: i ? asset : undefined }))}
+          >
+            <span className="asset-icon">{['◇', 'Au', 'Oil', 'Ag', 'Nq'][i]}</span>
+            {asset}
+          </button>
+        ))}
+        <div className="sidebar-bottom">
+          <button className="nav" onClick={() => setSettings(true)}>
+            <span>⚙</span>Settings & data
+          </button>
+          <div className="local-badge">
+            <span className="broker-dot dot-1" />
+            Local-first · Your data stays here
+          </div>
+        </div>
+      </aside>
+      <main>
+        <header className="topbar">
+          <div className="breadcrumb">
+            Workspace <span>/</span> <b>{tab}</b>
+          </div>
+          <div className="flex gap-3 items-center">
+            <span className={`connection ${data.status?.startsWith('Connected') ? 'connected' : ''}`}>
+              ● {data.status || 'Offline'}
+            </span>
+            <select
+              aria-label="Active execution and import account"
+              value={data.activeAccount || ''}
+              disabled={busy}
+              onChange={(e) =>
+                task(async () => {
+                  await call('accounts:select', Number(e.target.value));
+                  await refresh();
+                })
+              }
+            >
+              <option value="" disabled>
+                Select account
+              </option>
+              {data.accounts.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.display_name} · {a.broker_name}
+                </option>
+              ))}
+            </select>
+            <span className="avatar">MJ</span>
+          </div>
+        </header>
+        <div className="page">
+          <div className="page-heading">
+            <div>
+              <div className="eyebrow">YOUR PROCESS. YOUR PROGRESS.</div>
+              <h1>
+                {{ Overview: 'Performance overview', 'Trade journal': 'Trade journal', Returns: 'Returns on capital', 'Daily journal': 'Daily journal', 'Active trades': 'Active trades', 'Trade chart': 'Trade chart', Execution: 'Execution terminal' }[tab]}
+              </h1>
+              <p className="muted mt-2">
+                {tab === 'Returns' ? 'Measure each period’s realized result against its opening capital.' : tab === 'Daily journal' ? 'Review the behavior and context behind each trading day.' : tab === 'Active trades' ? 'Your open MT5 positions and their live risk.' : tab === 'Trade chart' ? 'See each entry and exit in its market context.' : tab === 'Execution' ? 'A deliberate decision before every trade.' : 'A clearer view of every trade, across every account.'}
+              </p>
+            </div>
+            {journalTab && <div className="flex gap-3">
+              <select
+                aria-label="Journal account filter"
+                value={accountScope === 'active' ? 'active' : accountScope === 'all' ? 'all' : String(filters.account || '')}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  changeAccountScope(value);
+                }}
+              >
+                <option value="active">Active MT5 account</option>
+                <option value="all">All accounts</option>
+                {data.accounts.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.display_name}
+                  </option>
+                ))}
+              </select>
+              <select
+                aria-label="Date range"
+                value={datePreset}
+                onChange={(e) => setDateRange(e.target.value)}
+              >
+                <option value="all">All time</option>
+                <option value="today">Today</option>
+                <option value="yesterday">Yesterday</option>
+                <option value="week">Last week</option>
+                <option value="30">Last 30 days</option>
+                <option value="90">Last 90 days</option>
+                <option value="365">Last 365 days</option>
+              </select>
+              {active && (
+                <button
+                  onClick={() =>
+                    task(async () => {
+                      const result = await call('mt5:connect-sync', active.id);
+                      await refresh();
+                      setToast(
+                        `Synced ${result.inserted} new closed trades from ${result.account.server_name}; ${result.duplicates} already existed.`,
+                      );
+                    })
+                  }
+                >
+                  ↻ Sync MT5
+                </button>
+              )}
+              <button className="primary" onClick={() => setSettings(true)}>
+                ＋ Import trades
+              </button>
+            </div>}
+          </div>
+          {error && (
+            <div role="alert" className="error mb-4">
+              {error}
+              <button onClick={() => setError('')}>Dismiss</button>
+            </div>
+          )}
+          {toast && (
+            <div role="status" className="success mb-4">
+              {toast}
+              <button onClick={() => setToast('')}>Dismiss</button>
+            </div>
+          )}
+          {journalTab ? (
+            <>
+              <div className="metrics">
+                {[
+                  [
+                    'Net performance',
+                    m.mixed ? 'Mixed currencies' : <MoneyValue value={m.net} currency={m.currency} fx={fx} />,
+                    'Realized P&L, after fees',
+                    'net',
+                  ],
+                  [
+                    'Win rate',
+                    `${(m.winRate || 0).toFixed(1)}%`,
+                    `${m.count || 0} closed trades`,
+                    'win',
+                  ],
+                  [
+                    'Profit factor',
+                    m.mixed ? '—' : m.noLosses ? '∞' : (m.profitFactor || 0).toFixed(2),
+                    'Gross profit / gross loss',
+                    'pf',
+                  ],
+                  [
+                    'Net ROI',
+                    m.mixed || m.roi == null ? '—' : `${m.roi.toFixed(2)}%`,
+                    'P&L / opening capital',
+                    'roi',
+                  ],
+                ].map(([label, value, sub, key]) => (
+                  <section className="metric" key={key}>
+                    <div className="metric-label">
+                      {label}
+                      <span>↗</span>
+                    </div>
+                    <strong className={key === 'net' ? (m.net < 0 ? 'negative' : 'positive') : ''}>
+                      {value}
+                    </strong>
+                    <small>{sub}</small>
+                  </section>
+                ))}
+              </div>
+              {m.mixed && (
+                <p className="notice mt-4">
+                  Select accounts with the same base currency to view combined monetary performance.
+                  Currency conversion is not assumed.
+                </p>
+              )}
+              {tab === 'Overview' && (
+                <section className="panel chart-panel">
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <h2>Cumulative performance</h2>
+                      <p className="muted text-xs mt-2">
+                        Realized results · {filters.asset || 'All assets'} ·{' '}
+                        {filters.broker || 'All brokers'}
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <strong className="text-xl">
+                        {m.mixed ? '—' : <MoneyValue value={m.balance} currency={m.currency} fx={fx} />}
+                      </strong>
+                      <p className="muted text-xs">Opening capital + filtered P&L</p>
+                    </div>
+                  </div>
+                  {data.trades.length && !m.mixed ? (
+                    <div className="chart">
+                      <div className="chart-labels">
+                        <span><MoneyValue value={hi} currency={m.currency} fx={fx} /></span>
+                        <span><MoneyValue value={lo} currency={m.currency} fx={fx} /></span>
+                      </div>
+                      <svg
+                        viewBox="0 0 900 175"
+                        preserveAspectRatio="none"
+                        role="img"
+                        aria-label="Cumulative realized profit and loss"
+                      >
+                        <defs>
+                          <linearGradient id="fill" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor="#67dabc" stopOpacity=".22" />
+                            <stop offset="100%" stopColor="#67dabc" stopOpacity="0" />
+                          </linearGradient>
+                        </defs>
+                        {[25, 75, 125].map((y) => (
+                          <line
+                            key={y}
+                            x1="0"
+                            x2="900"
+                            y1={y}
+                            y2={y}
+                            stroke="#26313d"
+                            strokeDasharray="3 6"
+                          />
+                        ))}
+                        <polygon points={`0,175 ${points} 900,175`} fill="url(#fill)" />
+                        <polyline
+                          points={points}
+                          fill="none"
+                          stroke="#67dabc"
+                          strokeWidth="2.5"
+                          vectorEffect="non-scaling-stroke"
+                        />
+                      </svg>
+                    </div>
+                  ) : (
+                    <div className="empty-chart">
+                      <div className="empty-symbol">↗</div>
+                      <h3>Your next chapter starts with a trade.</h3>
+                      <p>Import your closed positions to see your performance take shape.</p>
+                      <button onClick={() => setSettings(true)}>Set up your journal →</button>
+                    </div>
+                  )}
+                  <div className="chart-footer">
+                    <span>● Net P&L</span>
+                    <span>
+                      {data.trades.length
+                        ? 'Closed trades in chronological order'
+                        : 'No simulated results. Only your trading history.'}
+                    </span>
+                  </div>
+                </section>
+              )}
+              <section className="panel table-panel">
+                <div className="table-heading">
+                  <div>
+                    <h2>
+                      Trade history <span className="count">{trades.length}</span>
+                    </h2>
+                    <p className="muted text-xs mt-2">
+                      Every entry tells a story. Click a trade to reflect.
+                    </p>
+                  </div>
+                  <input
+                    className="search"
+                    placeholder="Search symbol, ticket, account…"
+                    aria-label="Search trades"
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                  />
+                </div>
+                <div className="table-scroll">
+                  <table>
+                    <thead>
+                      <tr>
+                        {[
+                          ['close_time', 'Closed / ticket'],
+                          ['standard_symbol', 'Asset'],
+                          ['display_name', 'Account'],
+                          ['type', 'Side'],
+                          ['lot_size', 'Lots'],
+                          ['net_pnl', 'Net P&L'],
+                          ['status', 'Result'],
+                        ].map(([key, label]) => (
+                          <th key={key}>
+                            <button
+                              onClick={() =>
+                                setSort({ key, asc: sort.key === key ? !sort.asc : true })
+                              }
+                            >
+                              {label} {sort.key === key ? (sort.asc ? '↑' : '↓') : ''}
+                            </button>
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {trades.slice(0, 500).map((t) => (
+                        <tr key={t.id} onClick={() => setSelected(t)}>
+                          <td>
+                            <button className="trade-link" onClick={() => setSelected(t)}>
+                              {new Date(t.close_time).toLocaleDateString()}
+                            </button>
+                            <small>#{t.ticket_number}</small>
+                          </td>
+                          <td className="font-semibold">{t.standard_symbol}</td>
+                          <td>
+                            {t.display_name}
+                            <small>{t.broker_name}</small>
+                          </td>
+                          <td>
+                            <span className={t.type === 'BUY' ? 'buy' : 'sell'}>{t.type}</span>
+                          </td>
+                          <td>{t.lot_size}</td>
+                          <td className={t.net_pnl < 0 ? 'negative' : 'positive'}>
+                            <MoneyValue value={t.net_pnl} currency={t.base_currency} fx={fx} />
+                          </td>
+                          <td>
+                            <span className={`result ${t.status.toLowerCase()}`}>{t.status}</span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {!trades.length && (
+                    <div className="empty-table">
+                      No trades to show. Add an account and import an MT4 / MT5 closed-position CSV.
+                    </div>
+                  )}
+                </div>
+                {trades.length > 500 && (
+                  <p className="notice">
+                    Showing the first 500 matching trades. Narrow the date, account, or search
+                    filter.
+                  </p>
+                )}
+              </section>
+            </>
+          ) : tab === 'Returns' ? (
+            <ReturnsView accountId={filters.account} broker={filters.broker} accounts={data.accounts} scopeValue={accountScope === 'active' ? 'active' : accountScope === 'all' ? 'all' : String(filters.account || '')} onScopeChange={changeAccountScope} fx={fx} onError={fail} />
+          ) : tab === 'Daily journal' ? (
+            <DailyJournal account={active} entries={data.dailyEntries || []} trades={data.trades} fx={fx} onSave={(entry) => task(async () => { await call('daily:save', entry); await refresh(); setToast('Daily reflection saved.'); })} />
+          ) : tab === 'Active trades' ? (
+            <ActiveTrades account={active} onError={fail} fx={fx} />
+          ) : tab === 'Trade chart' ? (
+            <TradeChart account={active} mappings={data.mappings} onError={fail} fx={fx} />
+          ) : (
+            <div className="execution-grid">
+              <section className="panel">
+                <h2>New order</h2>
+                <p className="muted my-3">
+                  {active
+                    ? `${active.display_name} · ${active.broker_name} · ${active.server_name}`
+                    : 'Select an execution account above.'}
+                </p>
+                <form onSubmit={(e) => prepare(e, 'place')} className="form-grid">
+                  <Field label="Asset">
+                    <select name="asset">
+                      {assets.map((a) => (
+                        <option key={a}>{a}</option>
+                      ))}
+                    </select>
+                  </Field>
+                  <Field label="Side">
+                    <select name="type">
+                      <option>BUY</option>
+                      <option>SELL</option>
+                    </select>
+                  </Field>
+                  <Field label="Order type">
+                    <select name="kind">
+                      {['MARKET', 'BUY_LIMIT', 'SELL_LIMIT', 'BUY_STOP', 'SELL_STOP'].map((k) => (
+                        <option key={k}>{k}</option>
+                      ))}
+                    </select>
+                  </Field>
+                  <Field
+                    label="Total lots"
+                    name="lots"
+                    type="number"
+                    min="0.001"
+                    step="any"
+                    defaultValue="0.1"
+                    required
+                  />
+                  <Field
+                    label="Stop loss"
+                    name="stop_loss"
+                    type="number"
+                    min="0.000001"
+                    step="any"
+                    required
+                  />
+                  <Field
+                    label="Pending entry price"
+                    name="price"
+                    type="number"
+                    min="0.000001"
+                    step="any"
+                  />
+                  <button className="primary col-span-2" disabled={!active || busy}>
+                    Review order →
+                  </button>
+                </form>
+              </section>
+              <section className="panel">
+                <h2>Close a position</h2>
+                <p className="muted my-3">
+                  The bridge will retrieve the position’s symbol and exact volume before
+                  confirmation.
+                </p>
+                <form onSubmit={(e) => prepare(e, 'close')}>
+                  <Field label="MT5 position ticket" name="position_id" required />
+                  <button className="mt-5" disabled={!active || busy}>
+                    Review closure →
+                  </button>
+                </form>
+                <div className="notice mt-6">
+                  Execution uses your connected local bridge. Every order and closure requires a
+                  fresh confirmation.
+                </div>
+              </section>
+              <section className="panel col-span-2">
+                <h2>Execution log</h2>
+                {!data.logs.length && <p className="muted mt-4">No instructions submitted.</p>}
+                {data.logs.map((l) => (
+                  <div className="log-row" key={l.id}>
+                    <div>
+                      <b>
+                        {l.action.toUpperCase()} · {l.state}
+                      </b>
+                      <small>
+                        {l.id} · {new Date(l.created_at).toLocaleString()}
+                      </small>
+                    </div>
+                    {['UNKNOWN', 'SENDING'].includes(l.state) && (
+                      <button
+                        onClick={() =>
+                          task(async () => {
+                            await call('trade:reconcile', l.id);
+                            await refresh();
+                          })
+                        }
+                      >
+                        Reconcile with bridge
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </section>
+            </div>
+          )}
+          <footer className="page-footer">
+            <span>MERIDIAN JOURNAL</span>
+            <span>{fx ? <span className="fx-source">USD/GHS {number(fx.bid, 4)} bid · {number(fx.ask, 4)} ask · {fx.symbol} via {fx.source}</span> : 'Stored on this device · SQLite'}</span>
+          </footer>
+        </div>
+        <div className="risk-banner">{disclaimer}</div>
+      </main>
+      {settings && (
+        <Modal title="Workspace settings" onClose={() => setSettings(false)}>
+          <Settings
+            data={data}
+            active={active}
+            task={task}
+            refresh={refresh}
+            importFile={importFile}
+            report={report}
+            setToast={setToast}
+          />
+        </Modal>
+      )}
+      {confirmation && (
+        <OrderConfirmation
+          order={confirmation}
+          busy={busy}
+          onConfirm={confirm}
+          onCancel={() => setConfirmation(null)}
+          fx={fx}
+        />
+      )}
+      {diagnostic && (
+        <Modal title={diagnostic.title} onClose={() => setDiagnostic(null)}>
+          <p className="notice mb-4">
+            {diagnostic.code}: {diagnostic.message}
+          </p>
+          <ol className="list-decimal pl-5 space-y-3">
+            {diagnostic.steps.map((s) => (
+              <li key={s}>{s}</li>
+            ))}
+          </ol>
+          <p className="muted mt-5">{diagnostic.note}</p>
+        </Modal>
+      )}
+      {selected && (
+        <Modal title={`Trade #${selected.ticket_number}`} onClose={() => setSelected(null)}>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              const f = Object.fromEntries(new FormData(e.currentTarget));
+              task(async () => {
+                await call('trade:annotate', {
+                  id: selected.id,
+                  notes: f.notes,
+                  setup_tags: f.setup
+                    .split(',')
+                    .map((s) => s.trim())
+                    .filter(Boolean),
+                  mistake_tags: f.mistakes
+                    .split(',')
+                    .map((s) => s.trim())
+                    .filter(Boolean),
+                });
+                setSelected(null);
+                await refresh();
+              });
+            }}
+          >
+            <Field
+              label="Setup tags (comma separated)"
+              name="setup"
+              defaultValue={JSON.parse(selected.setup_tags).join(', ')}
+            />
+            <Field
+              label="Mistake tags (comma separated)"
+              name="mistakes"
+              defaultValue={JSON.parse(selected.mistake_tags).join(', ')}
+            />
+            <Field label="Trade reflection">
+              <textarea name="notes" rows="5" defaultValue={selected.notes} />
+            </Field>
+            <button className="primary mt-4">Save reflection</button>
+          </form>
+        </Modal>
+      )}
+    </div>
+  );
+}
+function Settings({ data, active, task, refresh, importFile, report, setToast }) {
+  const [section, setSection] = useState('Journal');
+  const [accountMode, setAccountMode] = useState('edit');
+  const account = accountMode === 'edit' ? active : null;
+  const defaultTerminalPath = 'C:\\Program Files\\MetaTrader 5\\terminal64.exe';
+  const [terminalPath, setTerminalPath] = useState(account?.terminal_path || defaultTerminalPath);
+  useEffect(() => {
+    setTerminalPath(account?.terminal_path || defaultTerminalPath);
+  }, [accountMode, active?.id, active?.terminal_path]);
+  function submit(e, channel, transform = (x) => x) {
+    e.preventDefault();
+    const form = e.currentTarget,
+      values = Object.fromEntries(new FormData(form));
+    task(async () => {
+      await call(channel, transform(values));
+      await refresh();
+      setToast('Settings saved.');
+      form.reset();
+    });
+  }
+  return (
+    <>
+      <div className="tabs mb-6">
+        {['Journal', 'Accounts', 'Symbols', 'Bridge', 'Alerts'].map((s) => (
+          <button
+            key={s}
+            className={s === section ? 'tab-active' : ''}
+            onClick={() => setSection(s)}
+          >
+            {s}
+          </button>
+        ))}
+      </div>
+      {section === 'Journal' && (
+        <>
+          <p className="muted mb-4">
+            Import destination: <b>{active?.display_name || 'Select an account in the top bar'}</b>
+          </p>
+          <label
+            className="dropzone"
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={(e) => {
+              e.preventDefault();
+              task(() => importFile(e.dataTransfer.files[0]));
+            }}
+          >
+            <span className="text-3xl">⇧</span>
+            <b>Drop an MT4 / MT5 CSV here</b>
+            <span>or click to choose a file · closed positions · up to 20 MB</span>
+            <input
+              type="file"
+              accept=".csv,.tsv,.txt"
+              onChange={(e) => task(() => importFile(e.target.files[0]))}
+            />
+          </label>
+          <p className="muted text-xs mt-3">
+            Unzoned timestamps are interpreted as UTC. Normalize broker-server time before import.
+            Fees and commissions must retain their signed values.
+          </p>
+          {report && (
+            <div className="notice mt-4">
+              Imported {report.inserted} · Duplicates {report.duplicates} · Rejected{' '}
+              {report.errors.length}
+              {report.errors.slice(0, 20).map((e) => (
+                <div key={e.row}>
+                  Row {e.row}: {e.message}
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="setting-block">
+            <h3>Take your journal with you</h3>
+            <p className="muted my-3">
+              Portable JSON includes accounts, mappings, trades, tags, and notes. Connection secrets
+              and execution logs stay on this device.
+            </p>
+            <button
+              className="primary"
+              onClick={() =>
+                task(async () => {
+                  const path = await call('journal:export');
+                  if (path) setToast('Journal exported: ' + path);
+                })
+              }
+            >
+              Backup & Export Journal Data
+            </button>
+            <button
+              className="ml-3"
+              onClick={() =>
+                task(async () => {
+                  await call('journal:restore');
+                  await refresh();
+                })
+              }
+            >
+              Restore backup
+            </button>
+          </div>
+        </>
+      )}
+      {section === 'Accounts' && (
+        <>
+          <div className="flex gap-3 mb-5">
+            <button
+              className={accountMode === 'edit' ? 'tab-active' : ''}
+              disabled={!active}
+              onClick={() => setAccountMode('edit')}
+            >
+              Edit selected account
+            </button>
+            <button
+              className={accountMode === 'create' ? 'tab-active' : ''}
+              onClick={() => setAccountMode('create')}
+            >
+              Add another account
+            </button>
+          </div>
+          {!account && accountMode === 'edit' ? (
+            <p className="notice">
+              Select an account in the top bar to edit or launch its terminal.
+            </p>
+          ) : (
+            <form
+              key={`${accountMode}-${account?.id || 'new'}`}
+              onSubmit={(e) =>
+                submit(e, account ? 'accounts:update' : 'accounts:add', (f) => ({
+                  ...f,
+                  ...(account ? { id: account.id } : {}),
+                  starting_balance: Number(f.starting_balance),
+                }))
+              }
+              className="form-grid"
+            >
+              <Field
+                label="Display name"
+                name="display_name"
+                placeholder="My trading account"
+                defaultValue={account?.display_name || ''}
+                required
+              />
+              <Field
+                label="Broker"
+                name="broker_name"
+                placeholder="Exness"
+                defaultValue={account?.broker_name || 'Exness'}
+                required
+              />
+              <Field
+                label="Account type"
+                name="account_type"
+                defaultValue={account?.account_type || 'Standard'}
+                required
+              />
+              <Field
+                label="Base currency"
+                name="base_currency"
+                defaultValue={account?.base_currency || 'USD'}
+                pattern="[A-Z]{3}"
+                required
+              />
+              <Field
+                label="Opening capital (ROI basis)"
+                name="starting_balance"
+                type="number"
+                min="0"
+                step="any"
+                defaultValue={account?.starting_balance || 0}
+                required
+              />
+              <Field label="MT5 login ID" name="login_id" defaultValue={account?.login_id || ''} />
+              <Field
+                label="MT5 server name"
+                name="server_name"
+                placeholder="Exness-MT5Real10"
+                defaultValue={account?.server_name || ''}
+              />
+              <Field label="MT5 terminal executable">
+                <div className="path-picker">
+                  <input
+                    name="terminal_path"
+                    value={terminalPath}
+                    onChange={(e) => setTerminalPath(e.target.value)}
+                    required
+                  />
+                  <button
+                    type="button"
+                    onClick={() =>
+                      task(async () => {
+                        const path = await call('accounts:choose-terminal');
+                        if (path) setTerminalPath(path);
+                      })
+                    }
+                  >
+                    Browse…
+                  </button>
+                </div>
+              </Field>
+              <p className="notice col-span-2">
+                This profile opens its own terminal path. Several account profiles may reuse one MT5
+                installation, but that terminal can expose only its currently signed-in account. Use
+                separate MT5 installations when accounts must stay signed in simultaneously.
+              </p>
+              <div className="col-span-2 flex gap-3">
+                <button className="primary">
+                  {account ? 'Save account profile' : 'Create account profile'}
+                </button>
+                {account && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        task(async () => {
+                          const result = await call('mt5:connect-sync', account.id);
+                          await refresh();
+                          setToast(
+                            `Connected to ${result.account.server_name}. Imported ${result.inserted} closed trades; ${result.duplicates} already existed.`,
+                          );
+                        })
+                      }
+                    >
+                      Connect & sync MT5 history
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        task(async () => {
+                          const path = await call('accounts:launch-terminal', account.id);
+                          setToast(`Opened MT5: ${path}`);
+                        })
+                      }
+                    >
+                      Launch this MT5 terminal
+                    </button>
+                  </>
+                )}
+              </div>
+            </form>
+          )}
+        </>
+      )}
+      {section === 'Symbols' && (
+        <>
+          <form className="form-grid" onSubmit={(e) => submit(e, 'mappings:save')}>
+            <Field label="Broker" name="broker_name" placeholder="Exness" required />
+            <Field label="Standard symbol" name="standard_symbol" placeholder="XAUUSD" required />
+            <Field
+              label="Exact broker symbol"
+              name="broker_symbol"
+              placeholder="XAUUSDm"
+              required
+            />
+            <button className="primary self-end">Save mapping</button>
+          </form>
+          <div className="mt-6">
+            {data.mappings.map((m) => (
+              <div key={m.id} className="log-row">
+                <span>
+                  {m.broker_name} · {m.standard_symbol}
+                </span>
+                <code>{m.broker_symbol}</code>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+      {section === 'Bridge' && (
+        <form onSubmit={(e) => submit(e, 'bridge:connect')}>
+          <p className="notice mb-5">
+            Connect to a local MT5 adapter implementing the protocol in docs/BRIDGE.md. No bridge or
+            live execution is enabled by default.
+          </p>
+          <Field
+            label="Loopback WebSocket URL"
+            name="url"
+            defaultValue="ws://127.0.0.1:8787"
+            required
+          />
+          <Field
+            label="Bridge token (kept in memory for this session)"
+            name="token"
+            type="password"
+            minLength="16"
+            autoComplete="off"
+            required
+          />
+          <button className="primary mt-5">Connect local bridge</button>
+        </form>
+      )}
+      {section === 'Alerts' && (
+        <>
+          <section className="alert-preference">
+            <div><h3>Alert sound</h3><p className="muted text-xs mt-2">Choose how Meridian gets your attention when a target is reached.</p></div>
+            <div className="alert-mode-controls">
+              <select value={data.alertMode || 'tone'} onChange={(e) => task(async () => { await call('alerts:preference', e.target.value); await refresh(); setToast('Alert sound preference saved.'); })} aria-label="Price alert sound">
+                <option value="tone">Soft tone</option><option value="voice">Human-like voice</option>
+              </select>
+              <button type="button" onClick={() => previewAlert(data.alertMode || 'tone')}>▶ Play test</button>
+            </div>
+          </section>
+          <form
+            className="form-grid setting-block"
+            onSubmit={(e) => submit(e, 'alerts:add', (f) => ({ ...f, bound: Number(f.bound) }))}
+          >
+            <Field label="Asset">
+              <select name="asset">
+                {[...new Set(data.mappings.filter((m) => !active || m.broker_name === active.broker_name).map((m) => m.standard_symbol))].map((a) => (
+                  <option key={a}>{a}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Target price" name="bound" type="number" min="0" step="any" required />
+            <button className="primary self-end" disabled={!active}>Arm alert</button>
+          </form>
+          <p className="muted text-xs mt-3">
+            Alerts remain saved after restart. Meridian checks the selected account’s live MT5 bid price once per second while the app and terminal are running.
+          </p>
+          <div className="setting-block">
+            <h3>Price alerts <span className="count">{(data.priceAlerts || []).length}</span></h3>
+            <div className="alert-list">
+              {(data.priceAlerts || []).map((alert) => <div className="alert-rule" key={alert.id}>
+                <div className={`alert-state ${alert.status.toLowerCase()}`} />
+                <div><b>{alert.standard_symbol} {alert.direction === 'above' ? '≥' : '≤'} {number(alert.target_price, 6)}</b><small>{alert.display_name} · created {new Date(alert.created_at).toLocaleString()}</small>{alert.status === 'TRIGGERED' && <small>Triggered at {number(alert.trigger_price, 6)} · {new Date(alert.triggered_at).toLocaleString()}</small>}</div>
+                <span className={`result ${alert.status === 'ARMED' ? 'win' : 'be'}`}>{alert.status}</span>
+                {alert.status === 'TRIGGERED' && <button type="button" onClick={() => task(async () => { await call('alerts:rearm', alert.id); await refresh(); setToast(`${alert.standard_symbol} alert re-armed.`); })}>Re-arm</button>}
+                <button type="button" className="danger-quiet" onClick={() => task(async () => { await call('alerts:delete', alert.id); await refresh(); })}>Remove</button>
+              </div>)}
+              {!(data.priceAlerts || []).length && <p className="empty-table">No price alerts yet. Add as many targets as you need.</p>}
+            </div>
+          </div>
+          <details className="setting-block">
+            <summary>Optional SMTP email delivery</summary>
+            <form
+              className="form-grid mt-4"
+              onSubmit={(e) =>
+                submit(e, 'alerts:email', (f) => ({
+                  ...f,
+                  port: Number(f.port),
+                  secure: f.secure === 'true',
+                }))
+              }
+            >
+              {[
+                ['host', 'SMTP host'],
+                ['port', 'Port'],
+                ['user', 'Username'],
+                ['password', 'Password'],
+                ['from', 'From address'],
+                ['to', 'Destination address'],
+              ].map(([name, label]) => (
+                <Field
+                  key={name}
+                  label={label}
+                  name={name}
+                  type={
+                    name === 'password'
+                      ? 'password'
+                      : name === 'port'
+                        ? 'number'
+                        : ['from', 'to'].includes(name)
+                          ? 'email'
+                          : 'text'
+                  }
+                  required
+                />
+              ))}
+              <Field label="TLS mode">
+                <select name="secure">
+                  <option value="true">Implicit TLS (465)</option>
+                  <option value="false">Required STARTTLS (587)</option>
+                </select>
+              </Field>
+              <button className="primary self-end">Enable email this session</button>
+            </form>
+          </details>
+        </>
+      )}
+    </>
+  );
+}
+createRoot(document.getElementById('root')).render(<App />);

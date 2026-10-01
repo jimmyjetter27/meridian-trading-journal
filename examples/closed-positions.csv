@@ -1,0 +1,4 @@
+Ticket,Symbol,Type,Volume,Open Price,Close Price,Open Time,Close Time,Profit,Commission,Swap,Pips
+demo-001,XAUUSDm,buy,0.1,2500,2510,2026.09.01 09:00:00,2026.09.01 10:00:00,100,-3,0,100
+demo-002,XAUUSDm,sell,0.1,2510,2515,2026.09.02 09:00:00,2026.09.02 10:00:00,-50,-3,0,-50
+demo-003,XAUUSDm,buy,0.1,2515,2530,2026.09.03 09:00:00,2026.09.03 10:00:00,150,-3,-1,150

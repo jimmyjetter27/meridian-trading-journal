@@ -1,0 +1,86 @@
+{
+  "name": "meridian-trading-journal",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Local-first trading journal and confirmed MT5 bridge client",
+  "author": "Meridian",
+  "main": "electron/main.js",
+  "scripts": {
+    "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && electron . --dev\"",
+    "build": "vite build",
+    "start": "electron .",
+    "test": "node scripts/test.cjs",
+    "postinstall": "electron-builder install-app-deps",
+    "dist": "npm run build && electron-builder",
+    "format": "prettier --write .",
+    "smoke": "electron scripts/smoke.js",
+    "probe:mt5": "node scripts/probe-adapter.js",
+    "sync:mt5": "electron scripts/sync-local-journal.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.6.2",
+    "csv-parse": "^7.0.2",
+    "lightweight-charts": "^5.2.1",
+    "nodemailer": "^10.0.10",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "ws": "^8.19.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.18",
+    "@vitejs/plugin-react": "^5.1.2",
+    "concurrently": "^9.2.1",
+    "electron": "^41.10.3",
+    "electron-builder": "^26.0.12",
+    "prettier": "^3.9.8",
+    "tailwindcss": "^4.1.18",
+    "vite": "^7.3.1",
+    "wait-on": "^9.0.3"
+  },
+  "build": {
+    "appId": "local.meridian.journal",
+    "productName": "Meridian",
+    "files": [
+      "dist/**/*",
+      "build/**/*",
+      "electron/**/*",
+      "shared/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "adapter/dist/meridian-mt5-bridge.exe",
+        "to": "adapter/meridian-mt5-bridge.exe"
+      }
+    ],
+    "asarUnpack": [
+      "**/*.node"
+    ],
+    "win": {
+      "icon": "build/icon.png",
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "shortcutName": "Meridian"
+    },
+    "directories": {
+      "buildResources": "build",
+      "output": "release"
+    },
+    "mac": {
+      "target": "dmg"
+    },
+    "linux": {
+      "target": "AppImage"
+    }
+  }
+}

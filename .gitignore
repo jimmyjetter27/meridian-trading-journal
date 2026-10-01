@@ -1,0 +1,13 @@
+node_modules/
+dist/
+release*/
+*.db*
+.env
+.npm-cache/
+artifacts/smoke-profile/
+artifacts/*.log
+adapter/.venv/
+adapter/build/
+adapter/dist/
+adapter/__pycache__/
+*.pyc
