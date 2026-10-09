@@ -14,7 +14,7 @@ import { ExecutionEngine } from '../electron/execution.js';
 import { diagnose } from '../electron/diagnostics.js';
 import { syncMt5History } from '../electron/mt5Sync.js';
 import { calculatePeriodReturns } from '../electron/returns.js';
-import { parseSignalText, stripSignalDecorations, summarizeSignalAnalysis } from '../electron/signals.js';
+import { parseSignalText, stripSignalDecorations, summarizeSignalAnalysis, validateSignalDate } from '../electron/signals.js';
 function fixture() {
   const db = openDatabase(':memory:');
   insertObject(db, 'accounts', {
@@ -46,6 +46,7 @@ test('closed-position import preserves string tickets, costs, deduplication, and
     assert.equal(t.net_pnl, 95);
     assert.equal(t.standard_symbol, 'XAUUSD');
     assert.equal(t.pips, null);
+    assert.equal(t.close_reason, 'UNKNOWN');
   } finally {
     db.close();
   }
@@ -67,7 +68,7 @@ test('account schema migration provides an account-specific MT5 terminal path', 
     const account = publicAccounts(db)[0];
     assert.equal(account.terminal_path, 'C:\\Program Files\\MetaTrader 5\\terminal64.exe');
     assert.equal(account.tracking_since, '2000-01-01T00:00:00.000Z');
-    assert.equal(db.pragma('user_version', { simple: true }), 7);
+    assert.equal(db.pragma('user_version', { simple: true }), 8);
   } finally {
     db.close();
   }
@@ -201,6 +202,7 @@ test('signal parser removes emojis and extracts setup, TP1, and every reported e
     '🎯 TP1 HIT ✔️\n+50 PIPS from entry 4117\n+80 PIPS from entry 4114',
   );
   assert.equal(parsed.setup_number, 5);
+  assert.equal(parsed.embedded_date, '2026-10-08');
   assert.equal(parsed.side, 'BUY');
   assert.equal(parsed.standard_symbol, 'XAUUSD');
   assert.deepEqual([parsed.zone_low, parsed.zone_high, parsed.stop_loss, parsed.take_profit], [4117, 4120, 4112, 4125]);
@@ -210,6 +212,11 @@ test('signal parser removes emojis and extracts setup, TP1, and every reported e
   assert.deepEqual(summarizeSignalAnalysis({ trades: [{ net_pnl: 8 }, { net_pnl: 11 }] }, 300), {
     total_pnl: 19, projected_balance: 319, wins: 2, losses: 0,
   });
+  assert.equal(validateSignalDate(parsed, '2026-10-08'), parsed);
+  assert.throws(() => validateSignalDate(parsed, '2026-10-09'), /pasted setup date/);
+  assert.throws(() => parseSignalText('TRADE SETUP #2 – October 8, 2026\nBUY XAUUSD ZONE: 4173 - 4176\nSL: 4180\nTP: 4188'), /SL must be below/);
+  const riskOnly = parseSignalText('BUY XAUUSD ZONE: 4173 - 4176\nSL: 4168\nTP: 4188', '', { requireHeader: false });
+  assert.equal(riskOnly.setup_number, null);
 });
 function execution(db, send) {
   const bridge = {
@@ -424,6 +431,7 @@ test('MT5 history sync verifies identity, maps symbols, and deduplicates positio
           net_pnl: 95,
           pips: null,
           status: 'WIN',
+          close_reason: 'TP',
           setup_tags: '[]',
           mistake_tags: '[]',
           notes: 'Synced from MetaTrader 5',
@@ -434,6 +442,7 @@ test('MT5 history sync verifies identity, maps symbols, and deduplicates positio
     assert.equal((await syncMt5History(db, bridge, account, snapshot)).inserted, 1);
     assert.equal((await syncMt5History(db, bridge, account, snapshot)).duplicates, 1);
     assert.equal(db.prepare('SELECT count(*) AS total FROM trades').get().total, 1);
+    assert.equal(db.prepare('SELECT close_reason FROM trades').get().close_reason, 'TP');
     assert.equal(
       db.prepare('SELECT broker_symbol FROM symbol_mappings').get().broker_symbol,
       'XAUUSDm',

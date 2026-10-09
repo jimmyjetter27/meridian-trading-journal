@@ -31,6 +31,7 @@ const historyTradeSchema = z.object({
   net_pnl: z.number().finite(),
   pips: z.number().finite().nullable(),
   status: z.enum(['WIN', 'LOSS', 'BE']),
+  close_reason: z.enum(['MANUAL', 'TP', 'SL']),
   setup_tags: z.string(),
   mistake_tags: z.string(),
   notes: z.string(),
@@ -87,6 +88,8 @@ export async function syncMt5History(db, bridge, account, initialSnapshot) {
       const { broker_position_id: _position, broker_symbol: _symbol, ...journalTrade } = trade;
       const validatedTrade = tradeSchema.parse({ ...journalTrade, account_id: account.id });
       const result = insertObject(db, 'trades', validatedTrade, true);
+      if (!result.changes)
+        db.prepare('UPDATE trades SET close_reason=? WHERE ticket_number=?').run(validatedTrade.close_reason, validatedTrade.ticket_number);
       inserted += result.changes;
       duplicates += result.changes ? 0 : 1;
     }

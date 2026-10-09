@@ -142,6 +142,11 @@ class Adapter:
             close_price = sum(float(deal.price) * float(deal.volume) for deal in exits) / exit_volume
             opening = entries[0]
             closing = exits[-1]
+            close_reason = (
+                "SL" if closing.reason == mt5.DEAL_REASON_SL
+                else "TP" if closing.reason == mt5.DEAL_REASON_TP
+                else "MANUAL"
+            )
             net_pnl = sum(
                 float(deal.profit)
                 + float(deal.commission)
@@ -164,6 +169,7 @@ class Adapter:
                     "net_pnl": net_pnl,
                     "pips": None,
                     "status": "WIN" if net_pnl > 0 else "LOSS" if net_pnl < 0 else "BE",
+                    "close_reason": close_reason,
                     "setup_tags": "[]",
                     "mistake_tags": "[]",
                     "notes": "Synced from MetaTrader 5",
@@ -498,6 +504,66 @@ class Adapter:
             "market_status": trades[0]["status"] if trades else "UNKNOWN", "tick_count": len(usable),
         }
 
+    def signal_risk(self, params):
+        account, _terminal = self.connect()
+        symbol = params["symbol"]
+        info = mt5.symbol_info(symbol)
+        if info is None:
+            raise RuntimeError(f"Symbol {symbol} is unavailable: {mt5.last_error()}")
+        if not info.visible and not mt5.symbol_select(symbol, True):
+            raise RuntimeError(f"Symbol {symbol} could not be selected: {mt5.last_error()}")
+        tick = mt5.symbol_info_tick(symbol)
+        if tick is None or not tick.bid or not tick.ask:
+            raise RuntimeError(f"No current quote for {symbol}: {mt5.last_error()}")
+        side = params["side"]
+        order_type = mt5.ORDER_TYPE_BUY if side == "BUY" else mt5.ORDER_TYPE_SELL
+        lot_size = float(params["lot_size"])
+        capital = float(params["capital"])
+        stop_loss = float(params["stop_loss"])
+        take_profit = float(params["take_profit"])
+        spread = float(tick.ask) - float(tick.bid)
+        point = float(info.point or info.trade_tick_size or 0.0)
+        fee_per_lot, fee_sample_size = self._estimated_round_trip_fee(symbol)
+        fee = fee_per_lot * lot_size
+
+        def profit(entry, exit_price):
+            calculated = mt5.order_calc_profit(order_type, symbol, lot_size, entry, exit_price)
+            if calculated is not None:
+                return float(calculated)
+            tick_size = float(info.trade_tick_size or info.point)
+            tick_value = float(info.trade_tick_value_profit or info.trade_tick_value)
+            direction = 1 if side == "BUY" else -1
+            return ((exit_price - entry) * direction / tick_size) * tick_value * lot_size
+
+        rows = []
+        for item in params["entries"]:
+            signal_entry = float(item["price"])
+            execution_entry = signal_entry + spread if side == "BUY" else signal_entry
+            stop_execution = stop_loss if side == "BUY" else stop_loss + spread
+            target_execution = take_profit if side == "BUY" else take_profit + spread
+            loss_pnl = profit(execution_entry, stop_execution) + fee
+            profit_pnl = profit(execution_entry, target_execution) + fee
+            risk_amount = max(0.0, -loss_pnl)
+            rows.append({
+                "label": item["label"], "signal_entry": signal_entry, "execution_entry": execution_entry,
+                "stop_loss": stop_execution, "take_profit": target_execution,
+                "loss_pnl": loss_pnl, "profit_pnl": profit_pnl,
+                "loss_pct": risk_amount / capital * 100.0 if capital > 0 else None,
+                "profit_pct": profit_pnl / capital * 100.0 if capital > 0 else None,
+                "risk_reward": profit_pnl / risk_amount if risk_amount > 0 else None,
+                "estimated_fees": fee,
+            })
+        worst = max(range(len(rows)), key=lambda index: rows[index]["loss_pct"] or 0.0)
+        for index, row in enumerate(rows):
+            row["highest_risk"] = index == worst
+        return {
+            "login_id": str(account.login), "server_name": account.server, "currency": account.currency,
+            "symbol": symbol, "side": side, "lot_size": lot_size, "capital": capital, "entries": rows,
+            "spread": spread, "spread_points": spread / point if point else None,
+            "fee_per_lot": fee_per_lot, "fee_sample_size": fee_sample_size,
+            "risk_limit_pct": 2.0, "within_limit": rows[worst]["loss_pct"] <= 2.0,
+        }
+
     def fx_rate(self, params):
         account, _terminal = self.connect()
         base = (params.get("base") or account.currency).upper()
@@ -546,6 +612,8 @@ class Adapter:
             return self.chart_snapshot(params)
         if method == "signal.backtest":
             return self.signal_backtest(params)
+        if method == "signal.risk":
+            return self.signal_risk(params)
         if method == "fx.rate":
             return self.fx_rate(params)
         if method in ("trade.place", "trade.close", "trade.status", "position.snapshot"):

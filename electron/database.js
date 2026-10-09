@@ -4,7 +4,7 @@ import { z } from 'zod';
 export const schema = `
 CREATE TABLE IF NOT EXISTS accounts(id INTEGER PRIMARY KEY,broker_name TEXT NOT NULL,account_type TEXT NOT NULL,base_currency TEXT NOT NULL,display_name TEXT NOT NULL,starting_balance REAL NOT NULL DEFAULT 0 CHECK(starting_balance>=0),login_id TEXT NOT NULL DEFAULT '',master_password_encrypted TEXT NOT NULL DEFAULT '',server_name TEXT NOT NULL DEFAULT '',terminal_path TEXT NOT NULL DEFAULT 'C:\\Program Files\\MetaTrader 5\\terminal64.exe',tracking_since TEXT NOT NULL DEFAULT '2000-01-01T00:00:00.000Z');
 CREATE TABLE IF NOT EXISTS symbol_mappings(id INTEGER PRIMARY KEY,broker_name TEXT NOT NULL,standard_symbol TEXT NOT NULL,broker_symbol TEXT NOT NULL,UNIQUE(broker_name,broker_symbol),UNIQUE(broker_name,standard_symbol));
-CREATE TABLE IF NOT EXISTS trades(id INTEGER PRIMARY KEY,ticket_number TEXT NOT NULL UNIQUE,account_id INTEGER NOT NULL REFERENCES accounts(id),standard_symbol TEXT NOT NULL,type TEXT NOT NULL CHECK(type IN ('BUY','SELL')),lot_size REAL NOT NULL CHECK(lot_size>0),open_price REAL NOT NULL,close_price REAL NOT NULL,open_time TEXT NOT NULL,close_time TEXT NOT NULL,net_pnl REAL NOT NULL,pips REAL,status TEXT NOT NULL CHECK(status IN ('WIN','LOSS','BE')),setup_tags TEXT NOT NULL DEFAULT '[]',mistake_tags TEXT NOT NULL DEFAULT '[]',notes TEXT NOT NULL DEFAULT '');
+CREATE TABLE IF NOT EXISTS trades(id INTEGER PRIMARY KEY,ticket_number TEXT NOT NULL UNIQUE,account_id INTEGER NOT NULL REFERENCES accounts(id),standard_symbol TEXT NOT NULL,type TEXT NOT NULL CHECK(type IN ('BUY','SELL')),lot_size REAL NOT NULL CHECK(lot_size>0),open_price REAL NOT NULL,close_price REAL NOT NULL,open_time TEXT NOT NULL,close_time TEXT NOT NULL,net_pnl REAL NOT NULL,pips REAL,status TEXT NOT NULL CHECK(status IN ('WIN','LOSS','BE')),close_reason TEXT NOT NULL DEFAULT 'UNKNOWN' CHECK(close_reason IN ('MANUAL','TP','SL','UNKNOWN')),setup_tags TEXT NOT NULL DEFAULT '[]',mistake_tags TEXT NOT NULL DEFAULT '[]',notes TEXT NOT NULL DEFAULT '');
 CREATE INDEX IF NOT EXISTS trades_filter ON trades(account_id,standard_symbol,close_time);
 CREATE TABLE IF NOT EXISTS execution_log(id TEXT PRIMARY KEY,account_id INTEGER NOT NULL REFERENCES accounts(id),created_at TEXT NOT NULL,action TEXT NOT NULL,payload TEXT NOT NULL,state TEXT NOT NULL,detail TEXT NOT NULL DEFAULT '');
 CREATE TABLE IF NOT EXISTS daily_entries(id INTEGER PRIMARY KEY,account_id INTEGER NOT NULL REFERENCES accounts(id),entry_date TEXT NOT NULL,session TEXT NOT NULL DEFAULT '',mood TEXT NOT NULL DEFAULT '',behavior_tags TEXT NOT NULL DEFAULT '[]',market_context TEXT NOT NULL DEFAULT '',reflection TEXT NOT NULL DEFAULT '',next_session_rule TEXT NOT NULL DEFAULT '',created_at TEXT NOT NULL,updated_at TEXT NOT NULL,UNIQUE(account_id,entry_date));
@@ -38,7 +38,11 @@ export function openDatabase(path) {
   if (!columns.has('tracking_since')) {
     db.exec("ALTER TABLE accounts ADD COLUMN tracking_since TEXT NOT NULL DEFAULT '2000-01-01T00:00:00.000Z'");
   }
-  db.pragma('user_version=7');
+  const tradeColumns = new Set(db.prepare('PRAGMA table_info(trades)').all().map((column) => column.name));
+  if (!tradeColumns.has('close_reason')) {
+    db.exec("ALTER TABLE trades ADD COLUMN close_reason TEXT NOT NULL DEFAULT 'UNKNOWN' CHECK(close_reason IN ('MANUAL','TP','SL','UNKNOWN'))");
+  }
+  db.pragma('user_version=8');
   return db;
 }
 export const publicAccounts = (db) =>

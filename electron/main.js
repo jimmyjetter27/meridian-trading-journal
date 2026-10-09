@@ -22,7 +22,7 @@ import { diagnose } from './diagnostics.js';
 import { Mt5AdapterManager } from './mt5Adapter.js';
 import { syncMt5History } from './mt5Sync.js';
 import { calculatePeriodReturns } from './returns.js';
-import { parseSignalText, summarizeSignalAnalysis } from './signals.js';
+import { parseSignalText, summarizeSignalAnalysis, validateSignalDate } from './signals.js';
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 let db, win, engine, alerts;
 let restoring = false;
@@ -357,10 +357,24 @@ else
         account_id: z.number().int().positive(),
         signal_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
         setup_text: z.string().min(1).max(30000),
-        outcome_text: z.string().max(30000).default(''),
+        outcome: z.enum(['TP1', 'SL']),
         starting_balance: z.number().nonnegative().finite(),
       }).parse(input);
-      const parsed = parseSignalText(request.setup_text, request.outcome_text);
+      const parsed = validateSignalDate(parseSignalText(request.setup_text), request.signal_date);
+      parsed.tp1_confirmed = request.outcome === 'TP1';
+      parsed.stop_confirmed = request.outcome === 'SL';
+      const duplicateNumber = db.prepare(
+        'SELECT id FROM signal_analyses WHERE account_id=? AND signal_date=? AND setup_number=?',
+      ).get(request.account_id, request.signal_date, parsed.setup_number);
+      if (duplicateNumber)
+        throw Error(`Setup #${parsed.setup_number} is already saved for ${request.signal_date}. Delete it before adding a corrected version.`);
+      const duplicateSignal = db.prepare(
+        `SELECT setup_number FROM signal_analyses WHERE account_id=? AND signal_date=? AND standard_symbol=? AND side=?
+         AND zone_low=? AND zone_high=? AND stop_loss=? AND take_profit=? LIMIT 1`,
+      ).get(request.account_id, request.signal_date, parsed.standard_symbol, parsed.side,
+        parsed.zone_low, parsed.zone_high, parsed.stop_loss, parsed.take_profit);
+      if (duplicateSignal)
+        throw Error(`This signal is already saved as Setup #${duplicateSignal.setup_number} for ${request.signal_date}.`);
       const account = await liveAccount(request.account_id);
       const mapping = db.prepare(
         'SELECT broker_symbol FROM symbol_mappings WHERE broker_name=? AND standard_symbol=?',
@@ -382,28 +396,59 @@ else
       }, undefined, 60000);
       if (String(result.login_id) !== String(account.login_id) || result.server_name !== account.server_name)
         throw Error('MT5 returned data for a different account');
+      if (!result.trades.length)
+        throw Error(`The ${parsed.standard_symbol} entry zone was not reached in the broker’s tick history for ${request.signal_date}.`);
+      if (result.market_status !== request.outcome)
+        throw Error(`The selected ${request.outcome} result conflicts with the broker tick replay, which reached ${result.market_status.replaceAll('_', ' ')} first.`);
       const summary = summarizeSignalAnalysis(result, request.starting_balance);
       const analysis = { ...result, ...summary, parsed: { ...parsed, clean_setup_text: undefined, clean_outcome_text: undefined } };
       const now = new Date().toISOString();
-      db.prepare(
+      const inserted = db.prepare(
         `INSERT INTO signal_analyses(account_id,signal_date,setup_number,standard_symbol,broker_symbol,side,zone_low,zone_high,stop_loss,take_profit,lot_size,starting_balance,raw_setup,raw_outcome,result_json,created_at,updated_at)
          VALUES(@account_id,@signal_date,@setup_number,@standard_symbol,@broker_symbol,@side,@zone_low,@zone_high,@stop_loss,@take_profit,0.01,@starting_balance,@raw_setup,@raw_outcome,@result_json,@now,@now)
-         ON CONFLICT(account_id,signal_date,setup_number) DO UPDATE SET standard_symbol=excluded.standard_symbol,broker_symbol=excluded.broker_symbol,
-         side=excluded.side,zone_low=excluded.zone_low,zone_high=excluded.zone_high,stop_loss=excluded.stop_loss,take_profit=excluded.take_profit,
-         starting_balance=excluded.starting_balance,raw_setup=excluded.raw_setup,raw_outcome=excluded.raw_outcome,result_json=excluded.result_json,updated_at=excluded.updated_at`,
+        `,
       ).run({
         account_id: account.id, signal_date: request.signal_date, setup_number: parsed.setup_number,
         standard_symbol: parsed.standard_symbol, broker_symbol: mapping.broker_symbol, side: parsed.side,
         zone_low: parsed.zone_low, zone_high: parsed.zone_high, stop_loss: parsed.stop_loss,
         take_profit: parsed.take_profit, starting_balance: request.starting_balance,
-        raw_setup: parsed.clean_setup_text, raw_outcome: parsed.clean_outcome_text,
+        raw_setup: parsed.clean_setup_text, raw_outcome: request.outcome,
         result_json: JSON.stringify(analysis), now,
       });
-      return analysis;
+      return { ...analysis, id: Number(inserted.lastInsertRowid) };
+    });
+    handle('signals:risk', async (input) => {
+      const request = z.object({
+        account_id: z.number().int().positive(), setup_text: z.string().min(1).max(30000),
+        capital: z.number().positive().finite(), custom_entry: z.number().positive().finite().optional(),
+      }).parse(input);
+      const parsed = parseSignalText(request.setup_text, '', { requireHeader: false });
+      if (request.custom_entry != null && (request.custom_entry < parsed.zone_low || request.custom_entry > parsed.zone_high))
+        throw Error(`The custom entry must be between ${parsed.zone_low} and ${parsed.zone_high}.`);
+      const account = await liveAccount(request.account_id);
+      const mapping = db.prepare(
+        'SELECT broker_symbol FROM symbol_mappings WHERE broker_name=? AND standard_symbol=?',
+      ).get(account.broker_name, parsed.standard_symbol);
+      if (!mapping) throw Error(`No ${parsed.standard_symbol} symbol mapping is configured for ${account.broker_name}`);
+      const entries = [
+        { label: 'Lower zone', price: parsed.zone_low },
+        { label: 'Upper zone', price: parsed.zone_high },
+      ];
+      if (request.custom_entry != null && !entries.some((entry) => entry.price === request.custom_entry))
+        entries.push({ label: 'Custom entry', price: request.custom_entry });
+      const result = await bridge.request('signal.risk', {
+        symbol: mapping.broker_symbol, side: parsed.side, stop_loss: parsed.stop_loss,
+        take_profit: parsed.take_profit, lot_size: 0.01, capital: request.capital, entries,
+      }, undefined, 30000);
+      if (String(result.login_id) !== String(account.login_id) || result.server_name !== account.server_name)
+        throw Error('MT5 returned data for a different account');
+      return { ...result, parsed: { ...parsed, clean_setup_text: undefined, clean_outcome_text: undefined } };
     });
     handle('signals:delete', (input) => {
       const id = z.number().int().positive().parse(input);
-      return db.prepare('DELETE FROM signal_analyses WHERE id=?').run(id).changes;
+      const result = db.prepare('DELETE FROM signal_analyses WHERE id=?').run(id);
+      if (!result.changes) throw Error('Signal analysis not found');
+      return result.changes;
     });
     handle('mappings:save', (input) => {
       if (engine.busy) throw Error('Wait for execution to finish');

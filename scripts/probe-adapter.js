@@ -65,6 +65,7 @@ try {
       closedPositions: history.trades.length,
       dealCount: history.deal_count,
       symbols: [...new Set(history.trades.map((trade) => trade.broker_symbol))].sort(),
+      closeReasons: [...new Set(history.trades.map((trade) => trade.close_reason))].sort(),
       activePositions: positions.positions.length,
       pendingOrders: positions.pending_orders?.length || 0,
       chartSymbol,

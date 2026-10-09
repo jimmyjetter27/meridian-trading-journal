@@ -45,6 +45,7 @@ export const tradeSchema = z
     net_pnl: z.number().finite(),
     pips: z.number().finite().nullable(),
     status: z.enum(['WIN', 'LOSS', 'BE']),
+    close_reason: z.enum(['MANUAL', 'TP', 'SL', 'UNKNOWN']).default('UNKNOWN'),
     setup_tags: z.string().max(10000),
     mistake_tags: z.string().max(10000),
     notes: z.string().max(50000),

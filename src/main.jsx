@@ -230,6 +230,31 @@ function CalculatorsPage({ accounts, activeAccountId, fx }) {
   return <div className="calculators-layout"><section className="panel calculator-card"><div><div className="eyebrow">CAPITAL CALCULATOR</div><h2>Dollar amount as a percentage</h2><p className="muted mt-2">Find out how much a dollar amount represents relative to the selected account’s current capital.</p></div><div className="calculator-fields"><Field label="Account"><select value={accountId} onChange={(event) => setAccountId(event.target.value)}>{accounts.map((item) => <option key={item.id} value={item.id}>{item.display_name}</option>)}</select></Field><Field label="Dollar amount"><input type="number" min="0" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} /></Field></div><div className="calculator-result"><small>{money(value, account?.base_currency)} is</small><strong>{percentage == null ? '—' : `${percentage.toFixed(2)}%`}</strong><span>of <MoneyValue value={capital} currency={account?.base_currency} fx={fx} /> current capital</span></div><div className="calculator-reference">{[1, 2, 5, 10].map((rate) => <div key={rate}><small>{rate}% of capital</small><b><MoneyValue value={capital * rate / 100} currency={account?.base_currency} fx={fx} /></b></div>)}</div></section><section className="panel future-calculators"><h2>More calculators</h2><p className="muted mt-2">Additional trading and risk calculations can be added here later.</p></section></div>;
 }
 
+function RiskAnalysisPage({ accounts, activeAccountId, fx, onError }) {
+  const [accountId, setAccountId] = useState(activeAccountId || accounts[0]?.id || '');
+  const [capital, setCapital] = useState('');
+  const [customEntry, setCustomEntry] = useState('');
+  const [result, setResult] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const account = accounts.find((candidate) => candidate.id === Number(accountId));
+  useEffect(() => { if (activeAccountId) setAccountId(activeAccountId); }, [activeAccountId]);
+  useEffect(() => { setCapital(String(account?.current_balance ?? 0)); setResult(null); }, [account?.id]);
+  return <div className="risk-analysis-page">
+    <section className="panel signal-form-panel"><div><div className="eyebrow">PRE-TRADE CHECK</div><h2>Risk analysis</h2><p className="muted mt-2">Compare both ends of an entry zone and an optional custom entry. Results use 0.01 lot, the broker’s current spread, MT5 profit calculations, and your selected capital. Nothing is saved.</p></div>
+      <form className="signal-form" onSubmit={async (event) => { event.preventDefault(); const values = Object.fromEntries(new FormData(event.currentTarget)); try { setLoading(true); setResult(await call('signals:risk', { account_id: Number(accountId), setup_text: values.setup, capital: Number(capital), ...(customEntry === '' ? {} : { custom_entry: Number(customEntry) }) })); } catch (error) { onError(error); } finally { setLoading(false); } }}>
+        <div className="risk-fields"><Field label="Broker account"><select value={accountId} onChange={(event) => setAccountId(event.target.value)}>{accounts.map((item) => <option key={item.id} value={item.id}>{item.display_name} · {item.broker_name}</option>)}</select></Field><Field label="Account capital"><input type="number" min="0.01" step="0.01" value={capital} onChange={(event) => setCapital(event.target.value)} required /></Field><Field label="Custom entry inside zone"><input type="number" min="0" step="0.01" value={customEntry} onChange={(event) => setCustomEntry(event.target.value)} placeholder="Optional" /></Field><Field label="Lot size"><input value="0.01" disabled /></Field></div>
+        <Field label="Trade setup text"><textarea name="setup" rows="8" required placeholder={'BUY XAUUSD ZONE : 4173 - 4176\nSL: 4168\nTP: 4188 - 4195'} /></Field>
+        <button className="primary" disabled={loading || !account}>{loading ? 'Calculating with MT5…' : 'Calculate risk'}</button>
+      </form>
+    </section>
+    {result && <section className="panel risk-results"><div className={`risk-verdict ${result.within_limit ? 'safe' : 'blocked'}`}><div><div className="eyebrow">2% RISK RULE</div><h2>{result.within_limit ? 'Within your risk limit' : 'Do not take this trade'}</h2></div><strong>{number(Math.max(...result.entries.map((entry) => entry.loss_pct)), 2)}% worst-case risk</strong></div>
+      <div className="table-heading"><div><h2>{result.parsed.side} {result.parsed.standard_symbol}</h2><p className="muted text-xs mt-2">Zone {number(result.parsed.zone_low, 6)}–{number(result.parsed.zone_high, 6)} · SL {number(result.parsed.stop_loss, 6)} · TP1 {number(result.parsed.take_profit, 6)}</p></div><span className="count">0.01 lot</span></div>
+      <div className="table-scroll"><table><thead><tr><th>Entry option</th><th>Broker-adjusted entry</th><th>Loss at SL</th><th>Risk %</th><th>Profit at TP1</th><th>Profit %</th><th>Risk : reward</th></tr></thead><tbody>{result.entries.map((entry) => <tr key={entry.label} className={entry.highest_risk ? 'highest-risk-row' : ''}><td><b>{entry.label}</b><small>{number(entry.signal_entry, 6)}{entry.highest_risk ? ' · highest SL distance' : ''}</small></td><td>{number(entry.execution_entry, 6)}</td><td className="negative"><MoneyValue value={entry.loss_pnl} currency={result.currency} fx={fx} /></td><td className={entry.loss_pct > 2 ? 'negative' : 'positive'}>{number(entry.loss_pct, 2)}%</td><td className={entry.profit_pnl < 0 ? 'negative' : 'positive'}><MoneyValue value={entry.profit_pnl} currency={result.currency} fx={fx} /></td><td className={entry.profit_pct < 0 ? 'negative' : 'positive'}>{number(entry.profit_pct, 2)}%</td><td>1 : {number(entry.risk_reward, 2)}</td></tr>)}</tbody></table></div>
+      <div className="signal-method"><span>Current spread: {number(result.spread_points, 1)} points</span><span>{result.fee_sample_size ? `Fees estimated from ${result.fee_sample_size} completed trades` : 'No comparable commission history'}</span><span>Results are calculations only and are not saved</span></div>
+    </section>}
+  </div>;
+}
+
 function SignalAnalysisPage({ accounts, activeAccountId, analyses, fx, onRefresh, onError, onToast }) {
   const [accountId, setAccountId] = useState(activeAccountId || accounts[0]?.id || '');
   const [date, setDate] = useState(localDateKey());
@@ -255,25 +280,34 @@ function SignalAnalysisPage({ accounts, activeAccountId, analyses, fx, onRefresh
   }, {})).sort((a, b) => b.date.localeCompare(a.date));
   const visibleDays = dailySummaries.filter((day) => historyDate === 'all' || day.date === historyDate);
   const filteredTotals = visibleDays.reduce((total, day) => ({ days: total.days + 1, setups: total.setups + day.setups, trades: total.trades + day.trades, pnl: total.pnl + day.pnl }), { days: 0, setups: 0, trades: 0, pnl: 0 });
+  const deleteAnalysis = async (item) => {
+    if (!window.confirm(`Delete Setup #${item.setup_number || item.result?.parsed?.setup_number} for ${item.signal_date}?`)) return;
+    try {
+      await call('signals:delete', item.id);
+      if (latest?.id === item.id) setLatest(null);
+      await onRefresh();
+      onToast('Signal analysis deleted.');
+    } catch (error) { onError(error); }
+  };
   const renderAnalysis = (item, key) => {
     const result = item.result || item;
     const currency = item.base_currency || account?.base_currency || result.currency || 'USD';
     return <section className="panel signal-result" key={key}>
-      <div className="table-heading"><div><div className="eyebrow">{item.signal_date || date} · SETUP #{item.setup_number || result.parsed?.setup_number}</div><h2>{item.side || result.parsed?.side} {item.standard_symbol || result.parsed?.standard_symbol}</h2><p className="muted text-xs mt-2">Zone {number(item.zone_low ?? result.parsed?.zone_low, 6)}–{number(item.zone_high ?? result.parsed?.zone_high, 6)} · SL {number(item.stop_loss ?? result.parsed?.stop_loss, 6)} · TP1 {number(item.take_profit ?? result.parsed?.take_profit, 6)} · 0.01 lot per entry</p></div>{item.id && <button className="danger" onClick={async () => { try { await call('signals:delete', item.id); await onRefresh(); onToast('Saved signal analysis deleted.'); } catch (error) { onError(error); } }}>Delete</button>}</div>
+      <div className="table-heading"><div><div className="eyebrow">{item.signal_date || date} · SETUP #{item.setup_number || result.parsed?.setup_number}</div><h2>{item.side || result.parsed?.side} {item.standard_symbol || result.parsed?.standard_symbol}</h2><p className="muted text-xs mt-2">Zone {number(item.zone_low ?? result.parsed?.zone_low, 6)}–{number(item.zone_high ?? result.parsed?.zone_high, 6)} · SL {number(item.stop_loss ?? result.parsed?.stop_loss, 6)} · TP1 {number(item.take_profit ?? result.parsed?.take_profit, 6)} · 0.01 lot per entry</p></div>{item.id && <button className="danger" onClick={() => deleteAnalysis(item)}>Delete signal</button>}</div>
       <div className="signal-totals"><div><small>Total estimated P&amp;L</small><strong className={result.total_pnl < 0 ? 'negative' : 'positive'}><MoneyValue value={result.total_pnl} currency={currency} fx={fx} /></strong></div><div><small>Starting balance</small><strong><MoneyValue value={item.starting_balance ?? Number(startingBalance)} currency={currency} fx={fx} /></strong></div><div><small>Approximate balance</small><strong className={result.projected_balance < (item.starting_balance ?? Number(startingBalance)) ? 'negative' : 'positive'}><MoneyValue value={result.projected_balance} currency={currency} fx={fx} /></strong></div></div>
       {result.trades?.length ? <div className="table-scroll"><table><thead><tr><th>Trade</th><th>Entry</th><th>Exit</th><th>Outcome</th><th>Gross</th><th>Est. fees</th><th>Net P&amp;L</th></tr></thead><tbody>{result.trades.map((trade, index) => <tr key={`${trade.entry}-${index}`}><td>Entry {index + 1}<small>{trade.source?.startsWith('confirmed') ? 'Copied update + broker spread' : 'Broker tick replay'}</small></td><td>{number(trade.entry, 6)}{trade.signal_entry != null && <small>Signal {number(trade.signal_entry, 6)}</small>}{trade.reported_pips != null && <small>{number(trade.reported_pips, 1)} reported pips</small>}</td><td>{number(trade.exit, 6)}</td><td><span className={`result ${trade.net_pnl < 0 ? 'loss' : trade.status === 'OPEN_AT_DAY_END' ? 'be' : 'win'}`}>{trade.status}</span></td><td className={trade.gross_pnl < 0 ? 'negative' : 'positive'}>{money(trade.gross_pnl, currency)}</td><td>{money(trade.estimated_fees, currency)}</td><td className={trade.net_pnl < 0 ? 'negative' : 'positive'}><MoneyValue value={trade.net_pnl} currency={currency} fx={fx} /></td></tr>)}</tbody></table></div> : <div className="empty-table">The entry zone was not reached in the broker’s available tick history for this date.</div>}
       <div className="signal-method"><span>{number(result.tick_count, 0)} broker ticks checked</span><span>Median spread: {number(result.spread_points, 1)} points</span><span>{result.fee_sample_size ? `Fees estimated from ${result.fee_sample_size} completed ${result.symbol} trades` : 'No comparable fee history; commission estimate is $0.00'}</span></div>
     </section>;
   };
   return <div className="signal-page">
-    <section className="panel signal-form-panel"><div><div className="eyebrow">TP1 SIGNAL REPLAY</div><h2>Analyze a trade signal</h2><p className="muted mt-2">Paste one setup and its optional TP1 update. Meridian removes emojis, saves it by date and setup number, and uses the selected broker’s historical ticks. Every copied entry is calculated at 0.01 lot.</p></div>
-      <form onSubmit={async (event) => { event.preventDefault(); const values = Object.fromEntries(new FormData(event.currentTarget)); try { setLoading(true); const result = await call('signals:analyze', { account_id: Number(accountId), signal_date: date, setup_text: values.setup, outcome_text: values.outcome, starting_balance: Number(startingBalance) }); setLatest({ ...result, signal_date: date, setup_number: result.parsed.setup_number, starting_balance: Number(startingBalance), side: result.parsed.side, standard_symbol: result.parsed.standard_symbol, zone_low: result.parsed.zone_low, zone_high: result.parsed.zone_high, stop_loss: result.parsed.stop_loss, take_profit: result.parsed.take_profit, base_currency: account?.base_currency }); setHistoryDate(date); await onRefresh(); onToast(`Setup #${result.parsed.setup_number} analyzed and saved.`); } catch (error) { onError(error); } finally { setLoading(false); } }} className="signal-form">
+    <section className="panel signal-form-panel"><div><div className="eyebrow">TP1 / SL SIGNAL REPLAY</div><h2>Analyze a trade signal</h2><p className="muted mt-2">Paste one setup, choose whether TP1 or SL was hit, and Meridian will validate that result against the selected broker’s tick history before saving it.</p></div>
+      <form onSubmit={async (event) => { event.preventDefault(); const values = Object.fromEntries(new FormData(event.currentTarget)); try { setLoading(true); const result = await call('signals:analyze', { account_id: Number(accountId), signal_date: date, setup_text: values.setup, outcome: values.outcome, starting_balance: Number(startingBalance) }); setLatest({ ...result, signal_date: date, setup_number: result.parsed.setup_number, starting_balance: Number(startingBalance), side: result.parsed.side, standard_symbol: result.parsed.standard_symbol, zone_low: result.parsed.zone_low, zone_high: result.parsed.zone_high, stop_loss: result.parsed.stop_loss, take_profit: result.parsed.take_profit, base_currency: account?.base_currency }); setHistoryDate(date); await onRefresh(); onToast(`Setup #${result.parsed.setup_number} analyzed and saved.`); } catch (error) { onError(error); } finally { setLoading(false); } }} className="signal-form">
         <div className="signal-fields"><Field label="Broker account"><select value={accountId} onChange={(event) => setAccountId(event.target.value)}>{accounts.map((item) => <option key={item.id} value={item.id}>{item.display_name} · {item.broker_name}</option>)}</select></Field><Field label="Signal date"><input type="date" value={date} onChange={(event) => setDate(event.target.value)} required /></Field><Field label="Starting account balance"><input type="number" min="0" step="0.01" value={startingBalance} onChange={(event) => setStartingBalance(event.target.value)} required /></Field><Field label="Lot size"><input value="0.01" disabled /></Field></div>
         <Field label="Trade setup text"><textarea name="setup" rows="8" required placeholder={'TRADE SETUP #4 – October 8, 2026\n\nSELL XAUUSD ZONE : 4140 - 4143\nSL: 4148\nTP: 4135 - 4130 - 4020'} /></Field>
-        <Field label="TP1 result text (optional)"><textarea name="outcome" rows="5" placeholder={'TP1 HIT\n+50 PIPS from entry 4117\n+80 PIPS from entry 4114'} /></Field>
+        <Field label="What was hit first?"><select name="outcome" defaultValue="TP1"><option value="TP1">TP1 hit</option><option value="SL">Stop loss hit</option></select></Field>
         <button className="primary" disabled={loading || !account}>{loading ? 'Checking broker history…' : 'Analyze and save signal'}</button>
       </form>
-      <p className="notice">This is a historical estimate. With no TP1 update, Meridian treats the first broker tick inside the zone as the entry and the first later TP1 or SL touch as the exit. A copied TP1 update takes precedence and each “from entry” line becomes a separate 0.01-lot trade.</p>
+      <p className="notice">The header date must match the selected date. BUY signals require SL below the zone and TP1 above it; SELL signals require the opposite. Duplicate setup numbers and repeated signals are rejected.</p>
     </section>
     <section className="panel signal-daily-summary"><div className="table-heading"><div><div className="eyebrow">DAILY RESULTS</div><h2>Profit and loss by date</h2><p className="muted text-xs mt-2">Choose a date to narrow both this summary and the individual trade results below.</p></div><Field label="Date filter"><select value={historyDate} onChange={(event) => { setHistoryDate(event.target.value); setLatest(null); }}><option value="all">All dates</option>{availableDates.map((item) => <option key={item} value={item}>{new Date(`${item}T12:00:00`).toLocaleDateString(undefined, { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' })}</option>)}</select></Field></div>
       <div className="signal-filter-totals"><div><small>Days</small><strong>{filteredTotals.days}</strong></div><div><small>Setups</small><strong>{filteredTotals.setups}</strong></div><div><small>Trades</small><strong>{filteredTotals.trades}</strong></div><div><small>Net P&amp;L</small><strong className={filteredTotals.pnl < 0 ? 'negative' : 'positive'}><MoneyValue value={filteredTotals.pnl} currency={account?.base_currency} fx={fx} /></strong></div></div>
@@ -609,13 +643,13 @@ function App() {
         </div>
         <div className="workspace-label">PERSONAL WORKSPACE</div>
         <nav>
-          {['Overview', 'Trade journal', 'Returns', 'Deposits & withdrawals', 'Daily journal', 'Active trades', 'Trade chart', 'Growth calculator', 'Calculators', 'Signal analysis'].map((name, i) => (
+          {['Overview', 'Trade journal', 'Returns', 'Deposits & withdrawals', 'Daily journal', 'Active trades', 'Trade chart', 'Growth calculator', 'Calculators', 'Risk analysis', 'Signal analysis'].map((name, i) => (
             <button
               key={name}
               className={tab === name ? 'nav active' : 'nav'}
               onClick={() => setTab(name)}
             >
-              <span>{['◫', '☷', '%', '↕', '✎', '●', '⌁', '∿', '÷', '⌕'][i]}</span>
+              <span>{['◫', '☷', '%', '↕', '✎', '●', '⌁', '∿', '÷', '△', '⌕'][i]}</span>
               {name}
             </button>
           ))}
@@ -698,10 +732,10 @@ function App() {
             <div>
               <div className="eyebrow">YOUR PROCESS. YOUR PROGRESS.</div>
               <h1>
-                {{ Overview: 'Performance overview', 'Trade journal': 'Trade journal', Returns: 'Returns on capital', 'Deposits & withdrawals': 'Deposits & withdrawals', 'Daily journal': 'Daily journal', 'Active trades': 'Active trades', 'Trade chart': 'Trade chart', 'Growth calculator': 'Account growth & loss calculator', Calculators: 'Trading calculators', 'Signal analysis': 'Signal profit & loss analysis' }[tab]}
+                {{ Overview: 'Performance overview', 'Trade journal': 'Trade journal', Returns: 'Returns on capital', 'Deposits & withdrawals': 'Deposits & withdrawals', 'Daily journal': 'Daily journal', 'Active trades': 'Active trades', 'Trade chart': 'Trade chart', 'Growth calculator': 'Account growth & loss calculator', Calculators: 'Trading calculators', 'Risk analysis': 'Pre-trade risk analysis', 'Signal analysis': 'Signal profit & loss analysis' }[tab]}
               </h1>
               <p className="muted mt-2">
-                {tab === 'Returns' ? 'Measure each period’s realized result against its available capital.' : tab === 'Deposits & withdrawals' ? 'See every cash movement separately from trading performance.' : tab === 'Daily journal' ? 'Review the behavior and context behind each trading day.' : tab === 'Active trades' ? 'Your open MT5 positions, floating P&L, and risk at stop.' : tab === 'Trade chart' ? 'See each entry and exit in its market context.' : tab === 'Growth calculator' ? 'Explore compounded growth and loss scenarios for each account.' : tab === 'Calculators' ? 'Quick calculations based on your live account capital.' : tab === 'Signal analysis' ? 'Replay copied signals against your broker’s historical market data.' : 'A clearer view of every trade, across every account.'}
+                {tab === 'Returns' ? 'Measure each period’s realized result against its available capital.' : tab === 'Deposits & withdrawals' ? 'See every cash movement separately from trading performance.' : tab === 'Daily journal' ? 'Review the behavior and context behind each trading day.' : tab === 'Active trades' ? 'Your open MT5 positions, floating P&L, and risk at stop.' : tab === 'Trade chart' ? 'See each entry and exit in its market context.' : tab === 'Growth calculator' ? 'Explore compounded growth and loss scenarios for each account.' : tab === 'Calculators' ? 'Quick calculations based on your live account capital.' : tab === 'Risk analysis' ? 'Check risk, reward, and your 2% limit before taking a trade.' : tab === 'Signal analysis' ? 'Replay copied signals against your broker’s historical market data.' : 'A clearer view of every trade, across every account.'}
               </p>
             </div>
             {journalTab && <div className="flex gap-3">
@@ -920,6 +954,7 @@ function App() {
                           ['net_pnl', 'Net P&L'],
                           ['trade_return_pct', 'P/L %'],
                           ['status', 'Result'],
+                          ['close_reason', 'Closed by'],
                         ].map(([key, label]) => (
                           <th key={key}>
                             <button
@@ -958,6 +993,7 @@ function App() {
                           <td>
                             <span className={`result ${t.status.toLowerCase()}`}>{t.status}</span>
                           </td>
+                          <td><span className={`close-reason ${(t.close_reason || 'UNKNOWN').toLowerCase()}`}>{t.close_reason === 'MANUAL' ? 'Manual' : t.close_reason || 'Unknown'}</span></td>
                         </tr>
                       ))}
                     </tbody>
@@ -990,6 +1026,8 @@ function App() {
             <ProjectionPage accounts={data.accounts} activeAccountId={data.activeAccount} fx={fx} />
           ) : tab === 'Calculators' ? (
             <CalculatorsPage accounts={data.accounts} activeAccountId={data.activeAccount} fx={fx} />
+          ) : tab === 'Risk analysis' ? (
+            <RiskAnalysisPage accounts={data.accounts} activeAccountId={data.activeAccount} fx={fx} onError={fail} />
           ) : tab === 'Signal analysis' ? (
             <SignalAnalysisPage accounts={data.accounts} activeAccountId={data.activeAccount} analyses={data.signalAnalyses || []} fx={fx} onRefresh={refresh} onError={fail} onToast={setToast} />
           ) : null}
@@ -1028,7 +1066,7 @@ function App() {
       )}
       {selected && (
         <Modal title={`Trade #${selected.ticket_number}`} onClose={() => setSelected(null)}>
-          <dl className="review trade-result-review"><dt>Realized P&amp;L</dt><dd className={selected.net_pnl < 0 ? 'negative' : 'positive'}>{moneyPairText(selected.net_pnl, selected.base_currency, fx)}</dd><dt>Profit / loss percentage</dt><dd className={selected.net_pnl < 0 ? 'negative' : 'positive'}>{selected.trade_return_pct == null ? '—' : `${selected.trade_return_pct.toFixed(2)}%`}</dd><dt>Capital before close</dt><dd>{moneyPairText(selected.capital_at_trade, selected.base_currency, fx)}</dd></dl>
+          <dl className="review trade-result-review"><dt>Realized P&amp;L</dt><dd className={selected.net_pnl < 0 ? 'negative' : 'positive'}>{moneyPairText(selected.net_pnl, selected.base_currency, fx)}</dd><dt>Profit / loss percentage</dt><dd className={selected.net_pnl < 0 ? 'negative' : 'positive'}>{selected.trade_return_pct == null ? '—' : `${selected.trade_return_pct.toFixed(2)}%`}</dd><dt>Closed by</dt><dd>{selected.close_reason === 'MANUAL' ? 'Manual close' : selected.close_reason === 'TP' ? 'Take profit trigger' : selected.close_reason === 'SL' ? 'Stop loss trigger' : 'Unknown (imported trade)'}</dd><dt>Capital before close</dt><dd>{moneyPairText(selected.capital_at_trade, selected.base_currency, fx)}</dd></dl>
           <form
             onSubmit={(e) => {
               e.preventDefault();

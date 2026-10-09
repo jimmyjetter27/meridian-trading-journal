@@ -24,10 +24,14 @@ try {
   const result = await bridge.request('signal.backtest', {
     symbol: 'XAUUSD-VIP', date_from: '2026-10-08T00:00:00.000Z', date_to: '2026-10-08T23:59:59.999Z',
     side: 'BUY', zone_low: 4117, zone_high: 4120, stop_loss: 4112, take_profit: 4125, lot_size: 0.01,
-    tp1_confirmed: true, stop_confirmed: false,
-    reported_entries: [{ reported_pips: 50, entry: 4117 }, { reported_pips: 80, entry: 4114 }],
+    tp1_confirmed: true, stop_confirmed: false, reported_entries: [],
   }, undefined, 60000);
-  console.log(JSON.stringify(result));
+  const risk = await bridge.request('signal.risk', {
+    symbol: 'XAUUSD-VIP', side: 'BUY', stop_loss: 4168, take_profit: 4188,
+    lot_size: 0.01, capital: 305.10,
+    entries: [{ label: 'Lower zone', price: 4173 }, { label: 'Upper zone', price: 4176 }, { label: 'Custom entry', price: 4174.5 }],
+  }, undefined, 30000);
+  console.log(JSON.stringify({ backtest: result, risk }));
 } finally {
   bridge?.disconnect();
   if (child.pid) try { execFileSync('taskkill.exe', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true, stdio: 'ignore' }); } catch { /* already stopped */ }
