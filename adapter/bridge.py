@@ -5,7 +5,7 @@ import os
 import signal
 import sys
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import MetaTrader5 as mt5
 from websockets.sync.server import serve
@@ -89,7 +89,10 @@ class Adapter:
     def closed_trades(self, date_from):
         account, _terminal = self.connect()
         start = datetime.fromisoformat(date_from.replace("Z", "+00:00"))
-        deals = mt5.history_deals_get(start, datetime.now(timezone.utc))
+        # Some broker servers report deal timestamps a few minutes ahead of the
+        # workstation clock. A one-day read-only look-ahead prevents a completed
+        # deal from disappearing until the local clock catches up.
+        deals = mt5.history_deals_get(start, datetime.now(timezone.utc) + timedelta(days=1))
         if deals is None:
             raise RuntimeError(f"MT5 history request failed: {mt5.last_error()}")
 
@@ -221,6 +224,18 @@ class Adapter:
             if side == "SELL":
                 price_move *= -1
             spread_price = ask - bid if tick else 0.0
+            stop_loss = float(position.sl)
+            risk_amount = None
+            if stop_loss > 0:
+                calculated = mt5.order_calc_profit(
+                    position.type,
+                    position.symbol,
+                    float(position.volume),
+                    float(position.price_open),
+                    stop_loss,
+                )
+                if calculated is not None:
+                    risk_amount = max(0.0, -float(calculated))
             rows.append({
                 "position_id": str(position.ticket),
                 "identifier": str(getattr(position, "identifier", position.ticket)),
@@ -231,7 +246,7 @@ class Adapter:
                 "open_time": iso_time(getattr(position, "time_msc", 0), position.time),
                 "entry": float(position.price_open),
                 "current_price": current_price or float(position.price_current),
-                "stop_loss": float(position.sl),
+                "stop_loss": stop_loss,
                 "take_profit": float(position.tp),
                 "profit": float(position.profit),
                 "swap": float(position.swap),
@@ -239,6 +254,10 @@ class Adapter:
                 "points_pnl": price_move / point if point else None,
                 "spread_price": spread_price,
                 "spread_points": spread_price / point if point else None,
+                "risk_amount": risk_amount,
+                "risk_pct": (risk_amount / float(account.balance) * 100.0)
+                if risk_amount is not None and float(account.balance) > 0
+                else None,
                 "bid": bid,
                 "ask": ask,
                 "magic": int(position.magic),

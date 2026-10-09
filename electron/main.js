@@ -75,15 +75,42 @@ else
           until: z.string().datetime().optional(),
         })
         .parse(input || {});
-      const accounts = publicAccounts(db),
+      const balances = db.prepare('SELECT account_id,balance,captured_at FROM account_balances').all();
+      const balanceMap = new Map(balances.map((row) => [row.account_id, row]));
+      const tradeTotals = new Map(db.prepare('SELECT account_id,SUM(net_pnl) AS total FROM trades GROUP BY account_id').all().map((row) => [row.account_id, Number(row.total || 0)]));
+      const flowTotals = new Map(db.prepare('SELECT account_id,SUM(amount) AS total FROM capital_events GROUP BY account_id').all().map((row) => [row.account_id, Number(row.total || 0)]));
+      const accounts = publicAccounts(db).map((account) => ({
+          ...account,
+          current_balance: balanceMap.get(account.id)?.balance ?? Number(account.starting_balance || 0) + (tradeTotals.get(account.id) || 0) + (flowTotals.get(account.id) || 0),
+          balance_captured_at: balanceMap.get(account.id)?.captured_at || null,
+        })),
         selected = accounts.filter(
           (a) => (!f.account || a.id === f.account) && (!f.broker || a.broker_name === f.broker),
         );
       const trades = filteredTrades(db, f);
+      const selectedIds = new Set(selected.map((account) => account.id));
+      const allTrades = db.prepare('SELECT account_id,close_time,net_pnl FROM trades ORDER BY close_time,id').all()
+        .filter((trade) => selectedIds.has(trade.account_id));
+      const capitalEvents = db.prepare(
+        `SELECT c.*,a.display_name,a.broker_name,a.base_currency
+         FROM capital_events c JOIN accounts a ON a.id=c.account_id
+         WHERE (@account IS NULL OR c.account_id=@account)
+           AND (@broker IS NULL OR a.broker_name=@broker)
+         ORDER BY c.occurred_at DESC,c.id DESC`,
+      ).all({ account: f.account || null, broker: f.broker || null });
+      const visibleCashFlows = capitalEvents.filter((event) =>
+        (!f.since || event.occurred_at >= f.since) && (!f.until || event.occurred_at < f.until));
       return {
         accounts,
         trades,
-        metrics: analytics(trades, selected),
+        metrics: analytics(trades, selected, {
+          allTrades,
+          capitalEvents,
+          balanceSnapshots: balances,
+          since: f.since,
+          until: f.until,
+        }),
+        cashFlows: visibleCashFlows,
         mappings: db.prepare('SELECT * FROM symbol_mappings').all(),
         activeAccount: engine.activeAccount?.id || null,
         status,

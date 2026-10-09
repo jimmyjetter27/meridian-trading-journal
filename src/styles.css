@@ -566,6 +566,19 @@ tbody tr:hover {
 .replay-timeline input { width: 100%; accent-color: #57d6ad; }
 .returns-controls { display: flex; justify-content: space-between; align-items: center; margin-top: 0; }
 .returns-metrics { grid-template-columns: repeat(3, 1fr); margin-top: 18px; }
+.cashflow-metrics, .projection-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.principles-panel { display: grid; grid-template-columns: minmax(190px, .45fr) 1fr; gap: 34px; align-items: start; border-color: #3f3a2c; background: linear-gradient(135deg, #15191f, #171a1c); }
+.principles-panel ul { display: grid; gap: 14px; margin: 0; padding: 0; list-style: none; }
+.principles-panel li { display: grid; grid-template-columns: 18px 1fr; gap: 10px; line-height: 1.5; color: #d7dde5; }
+.principles-panel li span { color: #d2ad62; font-size: 10px; padding-top: 5px; }
+.growth-summary { margin-top: 18px; }
+.growth-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 18px; }
+.growth-card { display: grid; gap: 6px; padding: 16px; border: 1px solid #263443; border-radius: 9px; background: #101821; }
+.growth-card small { color: #8391a3; text-transform: uppercase; letter-spacing: .08em; }
+.growth-card strong { font-size: 21px; }
+.growth-card strong .ghs-equivalent { font-size: 10px; }
+.projection-controls { display: grid; grid-template-columns: minmax(260px, .75fr) minmax(480px, 1.25fr); gap: 34px; align-items: end; }
+.projection-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .returns-chart-panel { padding: 22px 24px 16px; }
 .returns-bars { display: flex; align-items: flex-end; gap: 7px; min-height: 265px; margin-top: 20px; overflow-x: auto; padding: 10px 2px 4px; }
 .return-bar-column { display: grid; grid-template-rows: 18px 190px 32px; gap: 5px; align-items: end; min-width: 42px; flex: 1; color: #8494a8; text-align: center; font-size: 8px; }
@@ -708,14 +721,6 @@ tbody tr:hover {
   margin-top: 26px;
   padding-top: 24px;
 }
-.execution-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 22px;
-}
-.execution-grid .panel {
-  margin-top: 0;
-}
 .review {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -818,11 +823,12 @@ tbody tr:hover {
   .metrics {
     grid-template-columns: 1fr 1fr;
   }
-  .execution-grid {
-    display: block;
+  .principles-panel,
+  .projection-controls {
+    grid-template-columns: 1fr;
   }
-  .execution-grid .panel {
-    margin-bottom: 16px;
+  .growth-cards {
+    grid-template-columns: 1fr;
   }
   .topbar {
     height: auto;

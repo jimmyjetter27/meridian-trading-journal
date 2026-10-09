@@ -1,6 +1,6 @@
 # Meridian
 
-A local-first Electron + React trading journal with a read-only MT5 adapter. The interface includes account and asset filters, rolling metrics, a realized P&L curve, sortable/searchable trade history, journal annotations, CSV import, portable backup/restore, diagnostics, and session price/email alerts. Meridian cannot place orders or close positions.
+A local-first Electron + React trading journal with a read-only MT5 adapter. The interface includes account and asset filters, rolling metrics, a realized P&L curve, cash-flow history, daily/weekly/monthly growth, active-position risk, account projections, journal annotations, CSV import, portable backup/restore, diagnostics, and session price/email alerts. Meridian cannot place orders or close positions.
 
 ## Run
 
@@ -35,6 +35,7 @@ An MT5 installation can store and switch among several saved accounts, so severa
 - `electron/database.js`: initialization, public account projection, filtered queries, transactional restore. `journal.db` is located in `app.getPath('userData')`; SQLite DELETE journaling keeps persistent storage to one database file (a transient rollback journal may exist during writes). Foreign keys and versioned schema migrations are enabled.
 - `electron/importer.js`: comma/semicolon/tab delimiter detection, BOM handling, quoted values, duplicate `Price`/`Time` columns, header aliases, fee-inclusive P&L and explicit symbol mapping. Ticket IDs stay strings; the requested global unique ticket constraint deduplicates across all accounts as well as repeated imports.
 - `electron/returns.js`: reconstructs daily, weekly, monthly, and yearly opening capital from the latest MT5 balance, realized P&L, and balance events. Deposits and withdrawals change capital without counting as trading returns.
+- `adapter/bridge.py`: tolerates small broker-server clock differences when reading completed deals and calculates each active position's loss at its configured stop with MT5's read-only profit calculator.
 - `electron/execution.js`: authoritative active-account context with execution disabled by default. The renderer exposes no execution IPC channels, and the packaged adapter rejects every trading method.
 - `electron/bridge.js`: authenticated loopback WebSocket transport for read-only account, history, position, chart, quote, and FX requests.
 - `electron/alerts.js`: crossing detection on fresh pushed ticks; native notifications and optional TLS-required nodemailer delivery. Rules trigger once and reset on restart. SMTP credentials remain in memory for the session. Delivery failures produce a native notice.

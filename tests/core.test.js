@@ -160,6 +160,19 @@ test('period returns use each period opening capital and roll realized P&L forwa
   assert.equal(monthly.periods[0].pnl, -6);
   assert.equal(monthly.periods[0].return_pct, -12);
 });
+test('same-period deposit becomes capital basis without counting as trading profit', () => {
+  const accounts = [{ id: 1, base_currency: 'USD', starting_balance: 0 }];
+  const trades = [{ account_id: 1, close_time: '2026-10-09T11:01:34.000Z', net_pnl: 5.1 }];
+  const events = [{ account_id: 1, occurred_at: '2026-10-09T09:52:05.000Z', amount: 300 }];
+  const balances = [{ account_id: 1, balance: 305.1 }];
+  const daily = calculatePeriodReturns(accounts, trades, events, balances, 'daily');
+  assert.equal(daily.periods[0].capital_basis, 300);
+  assert.ok(Math.abs(daily.periods[0].return_pct - 1.7) < 1e-9);
+  const metrics = analytics(trades, accounts, { allTrades: trades, capitalEvents: events, balanceSnapshots: balances });
+  assert.equal(metrics.capital, 300);
+  assert.equal(metrics.balance, 305.1);
+  assert.ok(Math.abs(metrics.roi - 1.7) < 1e-9);
+});
 function execution(db, send) {
   const bridge = {
     request: async (method, params, id) =>

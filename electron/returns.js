@@ -17,9 +17,12 @@ export function calculatePeriodReturns(accounts, trades, capitalEvents, balanceS
   const currencies = [...new Set(accounts.map((account) => account.base_currency))];
   if (currencies.length > 1) return { mixed: true, currency: null, current_capital: null, periods: [] };
   const snapshots = new Map(balanceSnapshots.map((row) => [row.account_id, Number(row.balance || 0)]));
-  const currentCapital = accounts.reduce((sum, account) => sum + (snapshots.has(account.id)
-    ? snapshots.get(account.id)
-    : Number(account.starting_balance || 0)), 0);
+  const currentCapital = accounts.reduce((sum, account) => {
+    if (snapshots.has(account.id)) return sum + snapshots.get(account.id);
+    const accountPnl = trades.filter((trade) => trade.account_id === account.id).reduce((total, trade) => total + Number(trade.net_pnl || 0), 0);
+    const accountFlows = capitalEvents.filter((event) => event.account_id === account.id).reduce((total, event) => total + Number(event.amount || 0), 0);
+    return sum + Number(account.starting_balance || 0) + accountPnl + accountFlows;
+  }, 0);
   const totalPnl = trades.reduce((sum, trade) => sum + Number(trade.net_pnl || 0), 0);
   const totalFlows = capitalEvents.reduce((sum, event) => sum + Number(event.amount || 0), 0);
   let capital = currentCapital - totalPnl - totalFlows;
@@ -40,11 +43,13 @@ export function calculatePeriodReturns(accounts, trades, capitalEvents, balanceS
   for (const group of [...groups.values()].sort((a, b) => a.key.localeCompare(b.key))) {
     const opening_capital = capital;
     capital += group.pnl + group.capital_flow;
+    const capital_basis = opening_capital + group.capital_flow;
     periods.push({
       ...group,
       opening_capital,
+      capital_basis,
       closing_capital: capital,
-      return_pct: opening_capital > 0 ? (group.pnl / opening_capital) * 100 : null,
+      return_pct: capital_basis > 0 ? (group.pnl / capital_basis) * 100 : null,
     });
   }
   return { mixed: false, currency: currencies[0] || 'USD', current_capital: currentCapital, periods };

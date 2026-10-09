@@ -110,6 +110,8 @@ function ActiveTrades({ account, onError, fx }) {
     return () => clearInterval(timer);
   }, [account?.id]);
   const positions = snapshot?.positions || [];
+  const protectedRisk = positions.reduce((sum, position) => sum + Number(position.risk_amount || 0), 0);
+  const unprotected = positions.filter((position) => !position.stop_loss).length;
   return (
     <>
       <section className="panel live-summary">
@@ -123,18 +125,22 @@ function ActiveTrades({ account, onError, fx }) {
           <strong className={(positions.reduce((sum, p) => sum + p.current_pnl, 0)) < 0 ? 'negative' : 'positive'}>
             <MoneyValue value={positions.reduce((sum, p) => sum + p.current_pnl, 0)} currency={snapshot?.currency || account?.base_currency} fx={fx} />
           </strong>
+          <small>Risk at stop</small>
+          <strong className={unprotected ? 'negative' : ''}>
+            {unprotected ? `${unprotected} without SL` : <MoneyValue value={protectedRisk} currency={snapshot?.currency || account?.base_currency} fx={fx} />}
+          </strong>
           <button onClick={load} disabled={!account || loading}>{loading ? 'Refreshing…' : '↻ Refresh'}</button>
         </div>
       </section>
       <section className="panel table-panel">
         <div className="table-heading"><div><h2>Open positions</h2><p className="muted text-xs mt-2">Click any row for full position details.</p></div><small className="muted">Auto-refreshes every 5 seconds</small></div>
         <div className="table-scroll">
-          <table><thead><tr><th>Opened / ticket</th><th>Symbol</th><th>Side</th><th>Lots</th><th>Entry</th><th>Current</th><th>Spread</th><th>Floating P&amp;L</th></tr></thead>
+          <table><thead><tr><th>Opened / ticket</th><th>Symbol</th><th>Side</th><th>Lots</th><th>Entry</th><th>Current</th><th>Risk at SL</th><th>Spread</th><th>Floating P&amp;L</th></tr></thead>
             <tbody>{positions.map((p) => <tr key={p.position_id} onClick={() => setSelectedPosition(p)}>
               <td>{new Date(p.open_time).toLocaleString()}<small>#{p.position_id}</small></td>
               <td className="font-semibold">{p.standard_symbol}<small>{p.symbol}</small></td>
               <td><span className={p.type === 'BUY' ? 'buy' : 'sell'}>{p.type}</span></td><td>{p.lots}</td>
-              <td>{number(p.entry, 6)}</td><td>{number(p.current_price, 6)}</td><td>{number(p.spread_points, 1)} pts</td>
+              <td>{number(p.entry, 6)}</td><td>{number(p.current_price, 6)}</td><td className={!p.stop_loss ? 'negative' : ''}>{p.stop_loss ? <><MoneyValue value={p.risk_amount || 0} currency={snapshot?.currency} fx={fx} /><small>{number(p.risk_pct, 2)}% of balance</small></> : 'No stop loss'}</td><td>{number(p.spread_points, 1)} pts</td>
               <td className={p.current_pnl < 0 ? 'negative' : 'positive'}><MoneyValue value={p.current_pnl} currency={snapshot?.currency} fx={fx} /></td>
             </tr>)}</tbody></table>
           {!loading && account && !positions.length && <div className="empty-table">No open positions on this MT5 account.</div>}
@@ -146,6 +152,7 @@ function ActiveTrades({ account, onError, fx }) {
           'Side': selectedPosition.type, 'Opened': new Date(selectedPosition.open_time).toLocaleString(), 'Broker symbol': selectedPosition.symbol,
           'Volume': `${selectedPosition.lots} lots`, 'Entry price': number(selectedPosition.entry, 6), 'Current price': number(selectedPosition.current_price, 6),
           'Take profit': selectedPosition.take_profit ? number(selectedPosition.take_profit, 6) : 'Not set', 'Stop loss': selectedPosition.stop_loss ? number(selectedPosition.stop_loss, 6) : 'Not set',
+          'Risk at stop': selectedPosition.stop_loss ? `${moneyPairText(selectedPosition.risk_amount || 0, snapshot?.currency, fx)} · ${number(selectedPosition.risk_pct, 2)}% of balance` : 'Unbounded — no stop loss',
           'Bid / Ask': `${number(selectedPosition.bid, 6)} / ${number(selectedPosition.ask, 6)}`, 'Current spread': `${number(selectedPosition.spread_points, 1)} points`,
           'Price movement': `${number(selectedPosition.points_pnl, 1)} points`, 'Floating P&L': moneyPairText(selectedPosition.current_pnl, snapshot?.currency, fx),
           'Swap': moneyPairText(selectedPosition.swap, snapshot?.currency, fx), 'Comment': selectedPosition.comment || '—',
@@ -153,6 +160,50 @@ function ActiveTrades({ account, onError, fx }) {
       </Modal>}
     </>
   );
+}
+
+const principles = [
+  'Never risk more than 1–2% of your account on any single trade.',
+  'Never have more than 2–3 trades open simultaneously.',
+  'After 3 consecutive losses, stop trading for the day.',
+  'Review your performance weekly to detect drift from your system.',
+];
+function CorePrinciples() {
+  return <section className="panel principles-panel"><div><div className="eyebrow">NON-NEGOTIABLES</div><h2>Core principles</h2></div><ul>{principles.map((principle) => <li key={principle}><span>◆</span>{principle}</li>)}</ul></section>;
+}
+
+function GrowthSummary({ accountId, broker, fx, onError }) {
+  const [periods, setPeriods] = useState(null);
+  useEffect(() => {
+    let current = true;
+    Promise.all(['daily', 'weekly', 'monthly'].map((granularity) => call('returns:read', { account: accountId, broker, granularity })))
+      .then((values) => { if (current) setPeriods(Object.fromEntries(['daily', 'weekly', 'monthly'].map((key, index) => [key, values[index].periods.at(-1)]))); })
+      .catch((error) => { if (current) onError(error); });
+    return () => { current = false; };
+  }, [accountId, broker]);
+  return <section className="panel growth-summary"><div className="table-heading"><div><h2>Realized growth</h2><p className="muted text-xs mt-2">Trading P&amp;L relative to the capital available in each current period.</p></div></div><div className="growth-cards">{['daily', 'weekly', 'monthly'].map((key) => { const period = periods?.[key]; return <div className="growth-card" key={key}><small>{key === 'daily' ? 'Today' : key === 'weekly' ? 'This week' : 'This month'}</small><strong className={(period?.pnl || 0) < 0 ? 'negative' : 'positive'}>{period ? <MoneyValue value={period.pnl} currency="USD" fx={fx} /> : '—'}</strong><span className={(period?.return_pct || 0) < 0 ? 'negative' : 'positive'}>{period?.return_pct == null ? '—' : `${period.return_pct.toFixed(2)}%`}</span></div>; })}</div></section>;
+}
+
+function CashFlowPage({ flows, fx }) {
+  const deposits = flows.filter((flow) => flow.amount > 0).reduce((sum, flow) => sum + flow.amount, 0);
+  const withdrawals = flows.filter((flow) => flow.amount < 0).reduce((sum, flow) => sum + Math.abs(flow.amount), 0);
+  const currency = flows[0]?.base_currency || 'USD';
+  return <><div className="metrics cashflow-metrics"><section className="metric"><div className="metric-label">Deposits</div><strong className="positive"><MoneyValue value={deposits} currency={currency} fx={fx} /></strong><small>{flows.filter((flow) => flow.amount > 0).length} entries</small></section><section className="metric"><div className="metric-label">Withdrawals</div><strong className="negative"><MoneyValue value={withdrawals} currency={currency} fx={fx} /></strong><small>{flows.filter((flow) => flow.amount < 0).length} entries</small></section><section className="metric"><div className="metric-label">Net cash flow</div><strong><MoneyValue value={deposits - withdrawals} currency={currency} fx={fx} /></strong><small>Excluded from trading performance</small></section></div><section className="panel table-panel"><div className="table-heading"><div><h2>Deposits &amp; withdrawals <span className="count">{flows.length}</span></h2><p className="muted text-xs mt-2">Cash movements reported by MT5.</p></div></div><div className="table-scroll"><table><thead><tr><th>Date</th><th>Account</th><th>Type</th><th>Amount</th><th>Broker reference</th><th>Comment</th></tr></thead><tbody>{flows.map((flow) => <tr key={flow.id}><td>{new Date(flow.occurred_at).toLocaleString()}</td><td>{flow.display_name}<small>{flow.broker_name}</small></td><td><span className={`result ${flow.amount > 0 ? 'win' : 'loss'}`}>{flow.amount > 0 ? 'DEPOSIT' : 'WITHDRAWAL'}</span></td><td className={flow.amount > 0 ? 'positive' : 'negative'}><MoneyValue value={flow.amount} currency={flow.base_currency} fx={fx} /></td><td>#{flow.ticket_number}</td><td>{flow.comment || '—'}</td></tr>)}</tbody></table>{!flows.length && <div className="empty-table">No deposits or withdrawals in this selection.</div>}</div></section></>;
+}
+
+function ProjectionPage({ accounts, activeAccountId, fx }) {
+  const [accountId, setAccountId] = useState(activeAccountId || accounts[0]?.id || '');
+  const [direction, setDirection] = useState('growth');
+  const [rate, setRate] = useState(5);
+  const [months, setMonths] = useState(2);
+  useEffect(() => { if (activeAccountId) setAccountId(activeAccountId); }, [activeAccountId]);
+  const account = accounts.find((candidate) => candidate.id === Number(accountId));
+  const start = Number(account?.current_balance || 0);
+  const signedRate = Math.min(100, Math.max(0, Number(rate) || 0)) * (direction === 'loss' ? -1 : 1);
+  const count = Math.min(120, Math.max(1, Number(months) || 1));
+  const rows = Array.from({ length: count }, (_, index) => ({ month: index + 1, balance: start * ((1 + signedRate / 100) ** (index + 1)) }));
+  const ending = rows.at(-1)?.balance || start;
+  return <><section className="panel projection-controls"><div><div className="eyebrow">COMPOUNDING SCENARIO</div><h2>Account growth &amp; loss calculator</h2><p className="muted text-xs mt-2">A mathematical projection for planning. It does not predict trading results.</p></div><div className="projection-fields"><Field label="Account"><select value={accountId} onChange={(event) => setAccountId(event.target.value)}>{accounts.map((item) => <option key={item.id} value={item.id}>{item.display_name}</option>)}</select></Field><Field label="Scenario"><select value={direction} onChange={(event) => setDirection(event.target.value)}><option value="growth">Growth</option><option value="loss">Loss</option></select></Field><Field label="Monthly percentage"><input type="number" min="0" max="100" step="0.1" value={rate} onChange={(event) => setRate(event.target.value)} /></Field><Field label="Months"><input type="number" min="1" max="120" value={months} onChange={(event) => setMonths(event.target.value)} /></Field></div></section><div className="metrics projection-metrics"><section className="metric"><div className="metric-label">Starting balance</div><strong><MoneyValue value={start} currency={account?.base_currency} fx={fx} /></strong><small>{account?.display_name || 'Select an account'}</small></section><section className="metric"><div className="metric-label">Projected balance</div><strong className={ending < start ? 'negative' : 'positive'}><MoneyValue value={ending} currency={account?.base_currency} fx={fx} /></strong><small>After {count} {count === 1 ? 'month' : 'months'}</small></section><section className="metric"><div className="metric-label">Projected change</div><strong className={ending < start ? 'negative' : 'positive'}><MoneyValue value={ending - start} currency={account?.base_currency} fx={fx} /></strong><small>{signedRate.toFixed(2)}% compounded monthly</small></section></div><section className="panel table-panel"><div className="table-heading"><h2>Month-by-month projection</h2></div><div className="table-scroll"><table><thead><tr><th>Month</th><th>Starting balance</th><th>{direction === 'growth' ? 'Growth' : 'Loss'}</th><th>Ending balance</th></tr></thead><tbody>{rows.map((row, index) => { const prior = index ? rows[index - 1].balance : start; return <tr key={row.month}><td>Month {row.month}</td><td><MoneyValue value={prior} currency={account?.base_currency} fx={fx} /></td><td className={row.balance < prior ? 'negative' : 'positive'}><MoneyValue value={row.balance - prior} currency={account?.base_currency} fx={fx} /></td><td><MoneyValue value={row.balance} currency={account?.base_currency} fx={fx} /></td></tr>; })}</tbody></table></div></section></>;
 }
 
 function PriceChart({ candles, markers }) {
@@ -236,7 +287,7 @@ function ReturnsView({ accountId, broker, accounts, scopeValue, onScopeChange, f
         <section className="metric"><div className="metric-label">Current capital</div><strong><MoneyValue value={result.current_capital ?? 0} currency={result.currency} fx={fx} /></strong><small>Latest balance reported by MT5</small></section>
       </div>
       <section className="panel returns-chart-panel"><h2>{granularity[0].toUpperCase() + granularity.slice(1)} returns</h2><div className="returns-bars">{recent.map((period) => <div className="return-bar-column" key={period.key} title={`${label(period.key)}: ${period.return_pct?.toFixed(2) ?? '—'}%`}><span>{period.return_pct == null ? '—' : `${period.return_pct.toFixed(1)}%`}</span><div className="return-bar-track"><i className={period.return_pct < 0 ? 'negative-bar' : 'positive-bar'} style={{ height: `${Math.max(3, Math.abs(period.return_pct || 0) / max * 100)}%` }} /></div><small>{period.key}</small></div>)}</div>{!periods.length && <div className="empty-table">{loading ? 'Calculating returns…' : 'No closed trades are available for this account selection.'}</div>}</section>
-      <section className="panel table-panel"><div className="table-heading"><div><h2>Period breakdown <span className="count">{periods.length}</span></h2><p className="muted text-xs mt-2">Opening capital is reconstructed from the MT5 balance at the start of each period. Deposits and withdrawals do not count as returns.</p></div></div><div className="table-scroll"><table><thead><tr><th>Period</th><th>Opening capital</th><th>Realized P&amp;L / return</th><th>Deposits / withdrawals</th><th>Closing capital</th><th>Trades</th></tr></thead><tbody>{[...periods].reverse().slice(0, 500).map((period) => <tr key={period.key}><td>{label(period.key)}</td><td><MoneyValue value={period.opening_capital} currency={result.currency} fx={fx} /></td><td className={period.pnl < 0 ? 'negative' : 'positive'}><MoneyValue value={period.pnl} currency={result.currency} fx={fx} /> <small>({period.return_pct == null ? '—' : `${period.return_pct.toFixed(2)}%`})</small></td><td><MoneyValue value={period.capital_flow} currency={result.currency} fx={fx} /></td><td><MoneyValue value={period.closing_capital} currency={result.currency} fx={fx} /></td><td>{period.trade_count}</td></tr>)}</tbody></table></div></section>
+      <section className="panel table-panel"><div className="table-heading"><div><h2>Period breakdown <span className="count">{periods.length}</span></h2><p className="muted text-xs mt-2">Capital used includes cash added during the period. Deposits and withdrawals never count as trading profit.</p></div></div><div className="table-scroll"><table><thead><tr><th>Period</th><th>Capital used</th><th>Realized P&amp;L / return</th><th>Deposits / withdrawals</th><th>Closing capital</th><th>Trades</th></tr></thead><tbody>{[...periods].reverse().slice(0, 500).map((period) => <tr key={period.key}><td>{label(period.key)}</td><td><MoneyValue value={period.capital_basis} currency={result.currency} fx={fx} /></td><td className={period.pnl < 0 ? 'negative' : 'positive'}><MoneyValue value={period.pnl} currency={result.currency} fx={fx} /> <small>({period.return_pct == null ? '—' : `${period.return_pct.toFixed(2)}%`})</small></td><td><MoneyValue value={period.capital_flow} currency={result.currency} fx={fx} /></td><td><MoneyValue value={period.closing_capital} currency={result.currency} fx={fx} /></td><td>{period.trade_count}</td></tr>)}</tbody></table></div></section>
     </>}
   </>;
 }
@@ -345,62 +396,6 @@ function DailyJournal({ account, entries, trades, fx, onSave }) {
   </div>;
 }
 
-export function OrderConfirmation({ order, busy, onConfirm, onCancel, fx }) {
-  const [left, setLeft] = useState(0);
-  useEffect(() => {
-    const update = () => setLeft(Math.max(0, Math.ceil((order.expires_at - Date.now()) / 1000)));
-    update();
-    const timer = setInterval(update, 250);
-    return () => clearInterval(timer);
-  }, [order]);
-  return (
-    <Modal
-      title={order.action === 'close' ? 'Confirm position closure' : 'Review your order'}
-      onClose={() => !busy && onCancel()}
-    >
-      <p className="muted mb-5">
-        Review every detail. This instruction will be sent to your connected MT5 terminal.
-      </p>
-      <dl className="review">
-        {Object.entries({
-          'Account name': order.account,
-          Broker: order.broker,
-          'Exact symbol': order.symbol,
-          Instruction: `${order.type} · ${order.kind}`,
-          'Total lot risk': `${order.lots} lots`,
-          'Stop loss': order.stop_loss || 'Not set on position',
-          'Entry reference': order.entry || 'Close at market',
-          'Estimated loss at stop':
-            order.estimated_risk === null
-              ? 'Not available for closure'
-              : moneyPairText(order.estimated_risk, order.currency, fx),
-          Position: order.position_id || 'New order',
-        }).map(([k, v]) => (
-          <React.Fragment key={k}>
-            <dt>{k}</dt>
-            <dd>{v}</dd>
-          </React.Fragment>
-        ))}
-      </dl>
-      <p className="notice mt-5">
-        Stop-loss estimates exclude gaps, slippage, commissions, and fees. A stop loss does not
-        guarantee the fill price.
-      </p>
-      <div className="flex justify-end gap-3 mt-6">
-        <button onClick={onCancel} disabled={busy}>
-          Cancel
-        </button>
-        <button className="primary" disabled={busy || !left} onClick={onConfirm}>
-          {busy
-            ? 'Transmitting…'
-            : left
-              ? `Confirm ${order.action === 'close' ? 'closure' : 'order'} · ${left}s`
-              : 'Quote expired'}
-        </button>
-      </div>
-    </Modal>
-  );
-}
 function App() {
   const [data, setData] = useState({
       accounts: [],
@@ -411,6 +406,7 @@ function App() {
       dailyEntries: [],
       priceAlerts: [],
       alertMode: 'tone',
+      cashFlows: [],
     }),
     [filters, setFilters] = useState({}),
     [accountScope, setAccountScope] = useState('active'),
@@ -420,8 +416,6 @@ function App() {
     [error, setError] = useState(''),
     [toast, setToast] = useState(''),
     [diagnostic, setDiagnostic] = useState(null),
-    [confirmation, setConfirmation] = useState(null),
-    [busy, setBusy] = useState(false),
     [search, setSearch] = useState(''),
     [sort, setSort] = useState({ key: 'close_time', asc: false }),
     [selected, setSelected] = useState(null),
@@ -467,7 +461,7 @@ function App() {
     if (accountScope === 'active' && data.activeAccount && filters.account !== data.activeAccount)
       setFilters((current) => ({ ...current, account: data.activeAccount, broker: undefined }));
   }, [accountScope, data.activeAccount]);
-  const journalTab = tab === 'Overview' || tab === 'Trade journal';
+  const journalTab = tab === 'Overview' || tab === 'Trade journal' || tab === 'Deposits & withdrawals';
   function setDateRange(preset) {
     setDatePreset(preset);
     const today = new Date();
@@ -505,41 +499,6 @@ function App() {
     setReport(await call('csv:import', { text: await file.text(), account_id: active.id }));
     await refresh();
   }
-  async function prepare(e, action) {
-    e.preventDefault();
-    const f = Object.fromEntries(new FormData(e.currentTarget));
-    const order =
-      action === 'close'
-        ? { position_id: f.position_id }
-        : {
-            asset: f.asset,
-            type: f.type,
-            kind: f.kind,
-            lots: Number(f.lots),
-            stop_loss: Number(f.stop_loss),
-            ...(f.price ? { price: Number(f.price) } : {}),
-          };
-    await task(async () => setConfirmation(await call('trade:prepare', { action, order })));
-  }
-  async function confirm() {
-    if (busy) return;
-    setBusy(true);
-    try {
-      const r = await call(
-        confirmation.action === 'close' ? 'trade:close-position' : 'trade:place-order',
-        confirmation.token,
-      );
-      setConfirmation(null);
-      if (!r.ok) setDiagnostic(r.diagnostic);
-      else setToast('MT5 acknowledged the instruction. Check the execution log for its result.');
-      await refresh();
-    } catch (e) {
-      fail(e);
-      setConfirmation(null);
-    } finally {
-      setBusy(false);
-    }
-  }
   const trades = data.trades
     .filter((t) =>
       `${t.standard_symbol} ${t.ticket_number} ${t.display_name}`
@@ -571,13 +530,13 @@ function App() {
         </div>
         <div className="workspace-label">PERSONAL WORKSPACE</div>
         <nav>
-          {['Overview', 'Trade journal', 'Returns', 'Daily journal', 'Active trades', 'Trade chart'].map((name, i) => (
+          {['Overview', 'Trade journal', 'Returns', 'Deposits & withdrawals', 'Daily journal', 'Active trades', 'Trade chart', 'Growth calculator'].map((name, i) => (
             <button
               key={name}
               className={tab === name ? 'nav active' : 'nav'}
               onClick={() => setTab(name)}
             >
-              <span>{['◫', '☷', '%', '✎', '●', '⌁', '⇄'][i]}</span>
+              <span>{['◫', '☷', '%', '↕', '✎', '●', '⌁', '∿'][i]}</span>
               {name}
             </button>
           ))}
@@ -636,7 +595,6 @@ function App() {
             <select
               aria-label="Active journal and import account"
               value={data.activeAccount || ''}
-              disabled={busy}
               onChange={(e) =>
                 task(async () => {
                   await call('accounts:select', Number(e.target.value));
@@ -661,10 +619,10 @@ function App() {
             <div>
               <div className="eyebrow">YOUR PROCESS. YOUR PROGRESS.</div>
               <h1>
-                {{ Overview: 'Performance overview', 'Trade journal': 'Trade journal', Returns: 'Returns on capital', 'Daily journal': 'Daily journal', 'Active trades': 'Active trades', 'Trade chart': 'Trade chart' }[tab]}
+                {{ Overview: 'Performance overview', 'Trade journal': 'Trade journal', Returns: 'Returns on capital', 'Deposits & withdrawals': 'Deposits & withdrawals', 'Daily journal': 'Daily journal', 'Active trades': 'Active trades', 'Trade chart': 'Trade chart', 'Growth calculator': 'Account growth & loss calculator' }[tab]}
               </h1>
               <p className="muted mt-2">
-                {tab === 'Returns' ? 'Measure each period’s realized result against its opening capital.' : tab === 'Daily journal' ? 'Review the behavior and context behind each trading day.' : tab === 'Active trades' ? 'Your open MT5 positions and their live risk.' : tab === 'Trade chart' ? 'See each entry and exit in its market context.' : 'A clearer view of every trade, across every account.'}
+                {tab === 'Returns' ? 'Measure each period’s realized result against its available capital.' : tab === 'Deposits & withdrawals' ? 'See every cash movement separately from trading performance.' : tab === 'Daily journal' ? 'Review the behavior and context behind each trading day.' : tab === 'Active trades' ? 'Your open MT5 positions, floating P&L, and risk at stop.' : tab === 'Trade chart' ? 'See each entry and exit in its market context.' : tab === 'Growth calculator' ? 'Explore compounded growth and loss scenarios for each account.' : 'A clearer view of every trade, across every account.'}
               </p>
             </div>
             {journalTab && <div className="flex gap-3">
@@ -729,7 +687,7 @@ function App() {
               <button onClick={() => setToast('')}>Dismiss</button>
             </div>
           )}
-          {journalTab ? (
+          {tab === 'Overview' || tab === 'Trade journal' ? (
             <>
               <div className="metrics">
                 {[
@@ -754,7 +712,7 @@ function App() {
                   [
                     'Net ROI',
                     m.mixed || m.roi == null ? '—' : `${m.roi.toFixed(2)}%`,
-                    'P&L / opening capital',
+                    'P&L / capital available for trading',
                     'roi',
                   ],
                 ].map(([label, value, sub, key]) => (
@@ -776,7 +734,7 @@ function App() {
                   Currency conversion is not assumed.
                 </p>
               )}
-              {tab === 'Overview' && (
+              {tab === 'Overview' && (<>
                 <section className="panel chart-panel">
                   <div className="flex justify-between items-start">
                     <div>
@@ -790,7 +748,7 @@ function App() {
                       <strong className="text-xl">
                         {m.mixed ? '—' : <MoneyValue value={m.balance} currency={m.currency} fx={fx} />}
                       </strong>
-                      <p className="muted text-xs">Opening capital + filtered P&L</p>
+                      <p className="muted text-xs">Capital, cash flows, and filtered P&amp;L</p>
                     </div>
                   </div>
                   {data.trades.length && !m.mixed ? (
@@ -849,7 +807,9 @@ function App() {
                     </span>
                   </div>
                 </section>
-              )}
+                <CorePrinciples />
+              </>)}
+              {tab === 'Trade journal' && <GrowthSummary accountId={filters.account} broker={filters.broker} fx={fx} onError={fail} />}
               <section className="panel table-panel">
                 <div className="table-heading">
                   <div>
@@ -943,112 +903,11 @@ function App() {
             <ActiveTrades account={active} onError={fail} fx={fx} />
           ) : tab === 'Trade chart' ? (
             <TradeChart account={active} mappings={data.mappings} onError={fail} fx={fx} />
-          ) : (
-            <div className="execution-grid">
-              <section className="panel">
-                <h2>New order</h2>
-                <p className="muted my-3">
-                  {active
-                    ? `${active.display_name} · ${active.broker_name} · ${active.server_name}`
-                    : 'Select an execution account above.'}
-                </p>
-                <form onSubmit={(e) => prepare(e, 'place')} className="form-grid">
-                  <Field label="Asset">
-                    <select name="asset">
-                      {assets.map((a) => (
-                        <option key={a}>{a}</option>
-                      ))}
-                    </select>
-                  </Field>
-                  <Field label="Side">
-                    <select name="type">
-                      <option>BUY</option>
-                      <option>SELL</option>
-                    </select>
-                  </Field>
-                  <Field label="Order type">
-                    <select name="kind">
-                      {['MARKET', 'BUY_LIMIT', 'SELL_LIMIT', 'BUY_STOP', 'SELL_STOP'].map((k) => (
-                        <option key={k}>{k}</option>
-                      ))}
-                    </select>
-                  </Field>
-                  <Field
-                    label="Total lots"
-                    name="lots"
-                    type="number"
-                    min="0.001"
-                    step="any"
-                    defaultValue="0.1"
-                    required
-                  />
-                  <Field
-                    label="Stop loss"
-                    name="stop_loss"
-                    type="number"
-                    min="0.000001"
-                    step="any"
-                    required
-                  />
-                  <Field
-                    label="Pending entry price"
-                    name="price"
-                    type="number"
-                    min="0.000001"
-                    step="any"
-                  />
-                  <button className="primary col-span-2" disabled={!active || busy}>
-                    Review order →
-                  </button>
-                </form>
-              </section>
-              <section className="panel">
-                <h2>Close a position</h2>
-                <p className="muted my-3">
-                  The bridge will retrieve the position’s symbol and exact volume before
-                  confirmation.
-                </p>
-                <form onSubmit={(e) => prepare(e, 'close')}>
-                  <Field label="MT5 position ticket" name="position_id" required />
-                  <button className="mt-5" disabled={!active || busy}>
-                    Review closure →
-                  </button>
-                </form>
-                <div className="notice mt-6">
-                  Execution uses your connected local bridge. Every order and closure requires a
-                  fresh confirmation.
-                </div>
-              </section>
-              <section className="panel col-span-2">
-                <h2>Execution log</h2>
-                {!data.logs.length && <p className="muted mt-4">No instructions submitted.</p>}
-                {data.logs.map((l) => (
-                  <div className="log-row" key={l.id}>
-                    <div>
-                      <b>
-                        {l.action.toUpperCase()} · {l.state}
-                      </b>
-                      <small>
-                        {l.id} · {new Date(l.created_at).toLocaleString()}
-                      </small>
-                    </div>
-                    {['UNKNOWN', 'SENDING'].includes(l.state) && (
-                      <button
-                        onClick={() =>
-                          task(async () => {
-                            await call('trade:reconcile', l.id);
-                            await refresh();
-                          })
-                        }
-                      >
-                        Reconcile with bridge
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </section>
-            </div>
-          )}
+          ) : tab === 'Deposits & withdrawals' ? (
+            <CashFlowPage flows={data.cashFlows || []} fx={fx} />
+          ) : tab === 'Growth calculator' ? (
+            <ProjectionPage accounts={data.accounts} activeAccountId={data.activeAccount} fx={fx} />
+          ) : null}
           <footer className="page-footer">
             <span>MERIDIAN JOURNAL</span>
             <span>{fx ? <span className="fx-source">USD/GHS {number(fx.bid, 4)} bid · {number(fx.ask, 4)} ask · {fx.symbol} via {fx.source}</span> : 'Stored on this device · SQLite'}</span>
@@ -1068,15 +927,6 @@ function App() {
             setToast={setToast}
           />
         </Modal>
-      )}
-      {confirmation && (
-        <OrderConfirmation
-          order={confirmation}
-          busy={busy}
-          onConfirm={confirm}
-          onCancel={() => setConfirmation(null)}
-          fx={fx}
-        />
       )}
       {diagnostic && (
         <Modal title={diagnostic.title} onClose={() => setDiagnostic(null)}>
