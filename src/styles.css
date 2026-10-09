@@ -579,6 +579,18 @@ tbody tr:hover {
 .growth-card strong .ghs-equivalent { font-size: 10px; }
 .projection-controls { display: grid; grid-template-columns: minmax(260px, .75fr) minmax(480px, 1.25fr); gap: 34px; align-items: end; }
 .projection-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.calculators-layout { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(260px, .65fr); gap: 18px; }
+.calculator-card { margin-top: 0; display: grid; gap: 24px; }
+.future-calculators { margin-top: 0; align-self: start; min-height: 180px; border-style: dashed; }
+.calculator-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.calculator-result { padding: 28px; border: 1px solid #2d4c46; border-radius: 12px; background: linear-gradient(135deg, #10201f, #101922); text-align: center; }
+.calculator-result small, .calculator-result span { display: block; color: #91a0b2; }
+.calculator-result strong { display: block; margin: 8px 0; color: #72dfbd; font-size: 46px; letter-spacing: -.04em; }
+.calculator-reference { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.calculator-reference > div { display: grid; gap: 5px; padding: 13px; border: 1px solid #283645; border-radius: 8px; background: #101821; }
+.calculator-reference small { color: #8190a2; }
+.calculator-reference b .ghs-equivalent { font-size: 9px; }
+.trade-result-review { margin-bottom: 20px; }
 .returns-chart-panel { padding: 22px 24px 16px; }
 .returns-bars { display: flex; align-items: flex-end; gap: 7px; min-height: 265px; margin-top: 20px; overflow-x: auto; padding: 10px 2px 4px; }
 .return-bar-column { display: grid; grid-template-rows: 18px 190px 32px; gap: 5px; align-items: end; min-width: 42px; flex: 1; color: #8494a8; text-align: center; font-size: 8px; }
@@ -824,11 +836,15 @@ tbody tr:hover {
     grid-template-columns: 1fr 1fr;
   }
   .principles-panel,
-  .projection-controls {
+  .projection-controls,
+  .calculators-layout {
     grid-template-columns: 1fr;
   }
   .growth-cards {
     grid-template-columns: 1fr;
+  }
+  .calculator-reference {
+    grid-template-columns: 1fr 1fr;
   }
   .topbar {
     height: auto;

@@ -9,7 +9,7 @@ import {
   filteredTrades,
 } from '../electron/database.js';
 import { parseTrades, importCsv } from '../electron/importer.js';
-import { analytics } from '../electron/analytics.js';
+import { addTradeReturnPercentages, analytics } from '../electron/analytics.js';
 import { ExecutionEngine } from '../electron/execution.js';
 import { diagnose } from '../electron/diagnostics.js';
 import { syncMt5History } from '../electron/mt5Sync.js';
@@ -172,6 +172,19 @@ test('same-period deposit becomes capital basis without counting as trading prof
   assert.equal(metrics.capital, 300);
   assert.equal(metrics.balance, 305.1);
   assert.ok(Math.abs(metrics.roi - 1.7) < 1e-9);
+});
+test('each trade return uses the capital available immediately before that close', () => {
+  const accounts = [{ id: 1, base_currency: 'USD', starting_balance: 0 }];
+  const trades = [
+    { id: 1, account_id: 1, close_time: '2026-10-09T11:00:00.000Z', net_pnl: 5 },
+    { id: 2, account_id: 1, close_time: '2026-10-09T12:00:00.000Z', net_pnl: -10 },
+  ];
+  const events = [{ id: 1, account_id: 1, occurred_at: '2026-10-09T09:00:00.000Z', amount: 100 }];
+  const result = addTradeReturnPercentages(trades, accounts, trades, events, [{ account_id: 1, balance: 95 }]);
+  assert.equal(result[0].capital_at_trade, 100);
+  assert.equal(result[0].trade_return_pct, 5);
+  assert.equal(result[1].capital_at_trade, 105);
+  assert.ok(Math.abs(result[1].trade_return_pct + 9.523809523809524) < 1e-9);
 });
 function execution(db, send) {
   const bridge = {

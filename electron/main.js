@@ -13,7 +13,7 @@ import {
   restorePackage,
 } from './database.js';
 import { accountSchema, mappingSchema } from '../shared/contracts.js';
-import { analytics } from './analytics.js';
+import { addTradeReturnPercentages, analytics } from './analytics.js';
 import { importCsv } from './importer.js';
 import { Bridge } from './bridge.js';
 import { ExecutionEngine } from './execution.js';
@@ -87,7 +87,7 @@ else
         selected = accounts.filter(
           (a) => (!f.account || a.id === f.account) && (!f.broker || a.broker_name === f.broker),
         );
-      const trades = filteredTrades(db, f);
+      const filtered = filteredTrades(db, f);
       const selectedIds = new Set(selected.map((account) => account.id));
       const allTrades = db.prepare('SELECT account_id,close_time,net_pnl FROM trades ORDER BY close_time,id').all()
         .filter((trade) => selectedIds.has(trade.account_id));
@@ -100,6 +100,7 @@ else
       ).all({ account: f.account || null, broker: f.broker || null });
       const visibleCashFlows = capitalEvents.filter((event) =>
         (!f.since || event.occurred_at >= f.since) && (!f.until || event.occurred_at < f.until));
+      const trades = addTradeReturnPercentages(filtered, selected, db.prepare('SELECT id,account_id,close_time,net_pnl FROM trades ORDER BY close_time,id').all().filter((trade) => selectedIds.has(trade.account_id)), capitalEvents, balances);
       return {
         accounts,
         trades,

@@ -60,3 +60,34 @@ export function analytics(trades, accounts, context = {}) {
     capitalFlow,
   };
 }
+
+export function addTradeReturnPercentages(trades, accounts, allTrades, capitalEvents, balanceSnapshots) {
+  const snapshots = new Map(balanceSnapshots.map((row) => [row.account_id, Number(row.balance || 0)]));
+  const percentages = new Map();
+  for (const account of accounts) {
+    const accountTrades = allTrades.filter((trade) => trade.account_id === account.id);
+    const accountEvents = capitalEvents.filter((event) => event.account_id === account.id);
+    const current = snapshots.has(account.id)
+      ? snapshots.get(account.id)
+      : Number(account.starting_balance || 0)
+        + accountTrades.reduce((sum, trade) => sum + Number(trade.net_pnl || 0), 0)
+        + accountEvents.reduce((sum, event) => sum + Number(event.amount || 0), 0);
+    let capital = current
+      - accountTrades.reduce((sum, trade) => sum + Number(trade.net_pnl || 0), 0)
+      - accountEvents.reduce((sum, event) => sum + Number(event.amount || 0), 0);
+    const ledger = [
+      ...accountEvents.map((event) => ({ type: 'flow', at: event.occurred_at, amount: Number(event.amount || 0), id: event.id })),
+      ...accountTrades.map((trade) => ({ type: 'trade', at: trade.close_time, amount: Number(trade.net_pnl || 0), id: trade.id })),
+    ].sort((a, b) => a.at.localeCompare(b.at)
+      || (a.type === 'flow' ? 0 : 1) - (b.type === 'flow' ? 0 : 1)
+      || a.id - b.id);
+    for (const entry of ledger) {
+      if (entry.type === 'trade') percentages.set(entry.id, {
+        capital_at_trade: capital,
+        trade_return_pct: capital > 0 ? (entry.amount / capital) * 100 : null,
+      });
+      capital += entry.amount;
+    }
+  }
+  return trades.map((trade) => ({ ...trade, ...(percentages.get(trade.id) || { capital_at_trade: null, trade_return_pct: null }) }));
+}

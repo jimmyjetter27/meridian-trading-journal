@@ -219,6 +219,17 @@ function ProjectionPage({ accounts, activeAccountId, fx }) {
   return <><section className="panel projection-controls"><div><div className="eyebrow">COMPOUNDING SCENARIO</div><h2>Account growth &amp; loss calculator</h2><p className="muted text-xs mt-2">A mathematical projection for planning. It does not predict trading results.</p></div><div className="projection-fields"><Field label="Account"><select value={accountId} onChange={(event) => setAccountId(event.target.value)}>{accounts.map((item) => <option key={item.id} value={item.id}>{item.display_name}</option>)}</select></Field><Field label="Scenario"><select value={direction} onChange={(event) => setDirection(event.target.value)}><option value="growth">Growth</option><option value="loss">Loss</option></select></Field><Field label="Monthly percentage"><input type="number" min="0" max="100" step="0.1" value={rate} onChange={(event) => setRate(event.target.value)} /></Field><Field label="Months"><input type="number" min="1" max="120" value={months} onChange={(event) => setMonths(event.target.value)} /></Field></div></section><div className="metrics projection-metrics"><section className="metric"><div className="metric-label">Starting balance</div><strong><MoneyValue value={start} currency={account?.base_currency} fx={fx} /></strong><small>{account?.display_name || 'Select an account'}</small></section><section className="metric"><div className="metric-label">Projected balance</div><strong className={ending < start ? 'negative' : 'positive'}><MoneyValue value={ending} currency={account?.base_currency} fx={fx} /></strong><small>After {count} {count === 1 ? 'month' : 'months'}</small></section><section className="metric"><div className="metric-label">Projected change</div><strong className={ending < start ? 'negative' : 'positive'}><MoneyValue value={ending - start} currency={account?.base_currency} fx={fx} /></strong><small>{signedRate.toFixed(2)}% compounded monthly</small></section></div><section className="panel table-panel"><div className="table-heading"><h2>Month-by-month projection</h2></div><div className="table-scroll"><table><thead><tr><th>Month</th><th>Starting balance</th><th>{direction === 'growth' ? 'Growth' : 'Loss'}</th><th>Ending balance</th></tr></thead><tbody>{rows.map((row, index) => { const prior = index ? rows[index - 1].balance : start; return <tr key={row.month}><td>Month {row.month}</td><td><MoneyValue value={prior} currency={account?.base_currency} fx={fx} /></td><td className={row.balance < prior ? 'negative' : 'positive'}><MoneyValue value={row.balance - prior} currency={account?.base_currency} fx={fx} /></td><td><MoneyValue value={row.balance} currency={account?.base_currency} fx={fx} /></td></tr>; })}</tbody></table></div></section></>;
 }
 
+function CalculatorsPage({ accounts, activeAccountId, fx }) {
+  const [accountId, setAccountId] = useState(activeAccountId || accounts[0]?.id || '');
+  const [amount, setAmount] = useState(20);
+  useEffect(() => { if (activeAccountId) setAccountId(activeAccountId); }, [activeAccountId]);
+  const account = accounts.find((candidate) => candidate.id === Number(accountId));
+  const capital = Number(account?.current_balance || 0);
+  const value = Math.max(0, Number(amount) || 0);
+  const percentage = capital > 0 ? value / capital * 100 : null;
+  return <div className="calculators-layout"><section className="panel calculator-card"><div><div className="eyebrow">CAPITAL CALCULATOR</div><h2>Dollar amount as a percentage</h2><p className="muted mt-2">Find out how much a dollar amount represents relative to the selected account’s current capital.</p></div><div className="calculator-fields"><Field label="Account"><select value={accountId} onChange={(event) => setAccountId(event.target.value)}>{accounts.map((item) => <option key={item.id} value={item.id}>{item.display_name}</option>)}</select></Field><Field label="Dollar amount"><input type="number" min="0" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} /></Field></div><div className="calculator-result"><small>{money(value, account?.base_currency)} is</small><strong>{percentage == null ? '—' : `${percentage.toFixed(2)}%`}</strong><span>of <MoneyValue value={capital} currency={account?.base_currency} fx={fx} /> current capital</span></div><div className="calculator-reference">{[1, 2, 5, 10].map((rate) => <div key={rate}><small>{rate}% of capital</small><b><MoneyValue value={capital * rate / 100} currency={account?.base_currency} fx={fx} /></b></div>)}</div></section><section className="panel future-calculators"><h2>More calculators</h2><p className="muted mt-2">Additional trading and risk calculations can be added here later.</p></section></div>;
+}
+
 function PriceChart({ candles, markers }) {
   const container = useRef(null);
   useEffect(() => {
@@ -543,13 +554,13 @@ function App() {
         </div>
         <div className="workspace-label">PERSONAL WORKSPACE</div>
         <nav>
-          {['Overview', 'Trade journal', 'Returns', 'Deposits & withdrawals', 'Daily journal', 'Active trades', 'Trade chart', 'Growth calculator'].map((name, i) => (
+          {['Overview', 'Trade journal', 'Returns', 'Deposits & withdrawals', 'Daily journal', 'Active trades', 'Trade chart', 'Growth calculator', 'Calculators'].map((name, i) => (
             <button
               key={name}
               className={tab === name ? 'nav active' : 'nav'}
               onClick={() => setTab(name)}
             >
-              <span>{['◫', '☷', '%', '↕', '✎', '●', '⌁', '∿'][i]}</span>
+              <span>{['◫', '☷', '%', '↕', '✎', '●', '⌁', '∿', '÷'][i]}</span>
               {name}
             </button>
           ))}
@@ -632,10 +643,10 @@ function App() {
             <div>
               <div className="eyebrow">YOUR PROCESS. YOUR PROGRESS.</div>
               <h1>
-                {{ Overview: 'Performance overview', 'Trade journal': 'Trade journal', Returns: 'Returns on capital', 'Deposits & withdrawals': 'Deposits & withdrawals', 'Daily journal': 'Daily journal', 'Active trades': 'Active trades', 'Trade chart': 'Trade chart', 'Growth calculator': 'Account growth & loss calculator' }[tab]}
+                {{ Overview: 'Performance overview', 'Trade journal': 'Trade journal', Returns: 'Returns on capital', 'Deposits & withdrawals': 'Deposits & withdrawals', 'Daily journal': 'Daily journal', 'Active trades': 'Active trades', 'Trade chart': 'Trade chart', 'Growth calculator': 'Account growth & loss calculator', Calculators: 'Trading calculators' }[tab]}
               </h1>
               <p className="muted mt-2">
-                {tab === 'Returns' ? 'Measure each period’s realized result against its available capital.' : tab === 'Deposits & withdrawals' ? 'See every cash movement separately from trading performance.' : tab === 'Daily journal' ? 'Review the behavior and context behind each trading day.' : tab === 'Active trades' ? 'Your open MT5 positions, floating P&L, and risk at stop.' : tab === 'Trade chart' ? 'See each entry and exit in its market context.' : tab === 'Growth calculator' ? 'Explore compounded growth and loss scenarios for each account.' : 'A clearer view of every trade, across every account.'}
+                {tab === 'Returns' ? 'Measure each period’s realized result against its available capital.' : tab === 'Deposits & withdrawals' ? 'See every cash movement separately from trading performance.' : tab === 'Daily journal' ? 'Review the behavior and context behind each trading day.' : tab === 'Active trades' ? 'Your open MT5 positions, floating P&L, and risk at stop.' : tab === 'Trade chart' ? 'See each entry and exit in its market context.' : tab === 'Growth calculator' ? 'Explore compounded growth and loss scenarios for each account.' : tab === 'Calculators' ? 'Quick calculations based on your live account capital.' : 'A clearer view of every trade, across every account.'}
               </p>
             </div>
             {journalTab && <div className="flex gap-3">
@@ -852,6 +863,7 @@ function App() {
                           ['type', 'Side'],
                           ['lot_size', 'Lots'],
                           ['net_pnl', 'Net P&L'],
+                          ['trade_return_pct', 'P/L %'],
                           ['status', 'Result'],
                         ].map(([key, label]) => (
                           <th key={key}>
@@ -887,6 +899,7 @@ function App() {
                           <td className={t.net_pnl < 0 ? 'negative' : 'positive'}>
                             <MoneyValue value={t.net_pnl} currency={t.base_currency} fx={fx} />
                           </td>
+                          <td className={t.net_pnl < 0 ? 'negative' : 'positive'}>{t.trade_return_pct == null ? '—' : `${t.trade_return_pct.toFixed(2)}%`}<small>of {money(t.capital_at_trade, t.base_currency)}</small></td>
                           <td>
                             <span className={`result ${t.status.toLowerCase()}`}>{t.status}</span>
                           </td>
@@ -920,6 +933,8 @@ function App() {
             <CashFlowPage flows={data.cashFlows || []} fx={fx} />
           ) : tab === 'Growth calculator' ? (
             <ProjectionPage accounts={data.accounts} activeAccountId={data.activeAccount} fx={fx} />
+          ) : tab === 'Calculators' ? (
+            <CalculatorsPage accounts={data.accounts} activeAccountId={data.activeAccount} fx={fx} />
           ) : null}
           <footer className="page-footer">
             <span>MERIDIAN JOURNAL</span>
@@ -956,6 +971,7 @@ function App() {
       )}
       {selected && (
         <Modal title={`Trade #${selected.ticket_number}`} onClose={() => setSelected(null)}>
+          <dl className="review trade-result-review"><dt>Realized P&amp;L</dt><dd className={selected.net_pnl < 0 ? 'negative' : 'positive'}>{moneyPairText(selected.net_pnl, selected.base_currency, fx)}</dd><dt>Profit / loss percentage</dt><dd className={selected.net_pnl < 0 ? 'negative' : 'positive'}>{selected.trade_return_pct == null ? '—' : `${selected.trade_return_pct.toFixed(2)}%`}</dd><dt>Capital before close</dt><dd>{moneyPairText(selected.capital_at_trade, selected.base_currency, fx)}</dd></dl>
           <form
             onSubmit={(e) => {
               e.preventDefault();
