@@ -235,14 +235,26 @@ function SignalAnalysisPage({ accounts, activeAccountId, analyses, fx, onRefresh
   const [date, setDate] = useState(localDateKey());
   const [startingBalance, setStartingBalance] = useState('');
   const [latest, setLatest] = useState(null);
+  const [historyDate, setHistoryDate] = useState('all');
   const [loading, setLoading] = useState(false);
   const account = accounts.find((candidate) => candidate.id === Number(accountId));
   useEffect(() => { if (activeAccountId) setAccountId(activeAccountId); }, [activeAccountId]);
-  useEffect(() => { setStartingBalance(String(account?.current_balance ?? 0)); setLatest(null); }, [account?.id]);
+  useEffect(() => { setStartingBalance(String(account?.current_balance ?? 0)); setLatest(null); setHistoryDate('all'); }, [account?.id]);
   const saved = analyses.filter((item) => item.account_id === Number(accountId));
+  const availableDates = [...new Set(saved.map((item) => item.signal_date))].sort().reverse();
   const savedHistory = latest
     ? saved.filter((item) => item.signal_date !== latest.signal_date || item.setup_number !== latest.setup_number)
     : saved;
+  const filteredHistory = savedHistory.filter((item) => historyDate === 'all' || item.signal_date === historyDate);
+  const dailySummaries = Object.values(saved.reduce((days, item) => {
+    const day = days[item.signal_date] ||= { date: item.signal_date, setups: 0, trades: 0, pnl: 0 };
+    day.setups += 1;
+    day.trades += item.result?.trades?.length || 0;
+    day.pnl += Number(item.result?.total_pnl || 0);
+    return days;
+  }, {})).sort((a, b) => b.date.localeCompare(a.date));
+  const visibleDays = dailySummaries.filter((day) => historyDate === 'all' || day.date === historyDate);
+  const filteredTotals = visibleDays.reduce((total, day) => ({ days: total.days + 1, setups: total.setups + day.setups, trades: total.trades + day.trades, pnl: total.pnl + day.pnl }), { days: 0, setups: 0, trades: 0, pnl: 0 });
   const renderAnalysis = (item, key) => {
     const result = item.result || item;
     const currency = item.base_currency || account?.base_currency || result.currency || 'USD';
@@ -255,7 +267,7 @@ function SignalAnalysisPage({ accounts, activeAccountId, analyses, fx, onRefresh
   };
   return <div className="signal-page">
     <section className="panel signal-form-panel"><div><div className="eyebrow">TP1 SIGNAL REPLAY</div><h2>Analyze a trade signal</h2><p className="muted mt-2">Paste one setup and its optional TP1 update. Meridian removes emojis, saves it by date and setup number, and uses the selected broker’s historical ticks. Every copied entry is calculated at 0.01 lot.</p></div>
-      <form onSubmit={async (event) => { event.preventDefault(); const values = Object.fromEntries(new FormData(event.currentTarget)); try { setLoading(true); const result = await call('signals:analyze', { account_id: Number(accountId), signal_date: date, setup_text: values.setup, outcome_text: values.outcome, starting_balance: Number(startingBalance) }); setLatest({ ...result, signal_date: date, setup_number: result.parsed.setup_number, starting_balance: Number(startingBalance), side: result.parsed.side, standard_symbol: result.parsed.standard_symbol, zone_low: result.parsed.zone_low, zone_high: result.parsed.zone_high, stop_loss: result.parsed.stop_loss, take_profit: result.parsed.take_profit, base_currency: account?.base_currency }); await onRefresh(); onToast(`Setup #${result.parsed.setup_number} analyzed and saved.`); } catch (error) { onError(error); } finally { setLoading(false); } }} className="signal-form">
+      <form onSubmit={async (event) => { event.preventDefault(); const values = Object.fromEntries(new FormData(event.currentTarget)); try { setLoading(true); const result = await call('signals:analyze', { account_id: Number(accountId), signal_date: date, setup_text: values.setup, outcome_text: values.outcome, starting_balance: Number(startingBalance) }); setLatest({ ...result, signal_date: date, setup_number: result.parsed.setup_number, starting_balance: Number(startingBalance), side: result.parsed.side, standard_symbol: result.parsed.standard_symbol, zone_low: result.parsed.zone_low, zone_high: result.parsed.zone_high, stop_loss: result.parsed.stop_loss, take_profit: result.parsed.take_profit, base_currency: account?.base_currency }); setHistoryDate(date); await onRefresh(); onToast(`Setup #${result.parsed.setup_number} analyzed and saved.`); } catch (error) { onError(error); } finally { setLoading(false); } }} className="signal-form">
         <div className="signal-fields"><Field label="Broker account"><select value={accountId} onChange={(event) => setAccountId(event.target.value)}>{accounts.map((item) => <option key={item.id} value={item.id}>{item.display_name} · {item.broker_name}</option>)}</select></Field><Field label="Signal date"><input type="date" value={date} onChange={(event) => setDate(event.target.value)} required /></Field><Field label="Starting account balance"><input type="number" min="0" step="0.01" value={startingBalance} onChange={(event) => setStartingBalance(event.target.value)} required /></Field><Field label="Lot size"><input value="0.01" disabled /></Field></div>
         <Field label="Trade setup text"><textarea name="setup" rows="8" required placeholder={'TRADE SETUP #4 – October 8, 2026\n\nSELL XAUUSD ZONE : 4140 - 4143\nSL: 4148\nTP: 4135 - 4130 - 4020'} /></Field>
         <Field label="TP1 result text (optional)"><textarea name="outcome" rows="5" placeholder={'TP1 HIT\n+50 PIPS from entry 4117\n+80 PIPS from entry 4114'} /></Field>
@@ -263,8 +275,12 @@ function SignalAnalysisPage({ accounts, activeAccountId, analyses, fx, onRefresh
       </form>
       <p className="notice">This is a historical estimate. With no TP1 update, Meridian treats the first broker tick inside the zone as the entry and the first later TP1 or SL touch as the exit. A copied TP1 update takes precedence and each “from entry” line becomes a separate 0.01-lot trade.</p>
     </section>
-    {latest && renderAnalysis(latest, 'latest')}
-    <div className="signal-history"><div className="table-heading"><div><h2>Saved signal analyses</h2><p className="muted text-xs mt-2">Categorized by signal date and setup number.</p></div><span className="count">{saved.length}</span></div>{savedHistory.map((item) => renderAnalysis(item, item.id))}{!saved.length && <div className="empty-table">No signal analyses saved for this account yet.</div>}</div>
+    <section className="panel signal-daily-summary"><div className="table-heading"><div><div className="eyebrow">DAILY RESULTS</div><h2>Profit and loss by date</h2><p className="muted text-xs mt-2">Choose a date to narrow both this summary and the individual trade results below.</p></div><Field label="Date filter"><select value={historyDate} onChange={(event) => { setHistoryDate(event.target.value); setLatest(null); }}><option value="all">All dates</option>{availableDates.map((item) => <option key={item} value={item}>{new Date(`${item}T12:00:00`).toLocaleDateString(undefined, { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' })}</option>)}</select></Field></div>
+      <div className="signal-filter-totals"><div><small>Days</small><strong>{filteredTotals.days}</strong></div><div><small>Setups</small><strong>{filteredTotals.setups}</strong></div><div><small>Trades</small><strong>{filteredTotals.trades}</strong></div><div><small>Net P&amp;L</small><strong className={filteredTotals.pnl < 0 ? 'negative' : 'positive'}><MoneyValue value={filteredTotals.pnl} currency={account?.base_currency} fx={fx} /></strong></div></div>
+      <div className="table-scroll"><table><thead><tr><th>Date</th><th>Signal setups</th><th>Individual trades</th><th>Daily profit / loss</th></tr></thead><tbody>{visibleDays.map((day) => <tr key={day.date}><td><button className="date-link" onClick={() => { setHistoryDate(day.date); setLatest(null); }}>{new Date(`${day.date}T12:00:00`).toLocaleDateString(undefined, { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' })}</button></td><td>{day.setups}</td><td>{day.trades}</td><td className={day.pnl < 0 ? 'negative' : 'positive'}><MoneyValue value={day.pnl} currency={account?.base_currency} fx={fx} /></td></tr>)}</tbody></table>{!visibleDays.length && <div className="empty-table">No saved signal results for this date.</div>}</div>
+    </section>
+    {latest && (historyDate === 'all' || latest.signal_date === historyDate) && renderAnalysis(latest, 'latest')}
+    <div className="signal-history"><div className="table-heading"><div><h2>{historyDate === 'all' ? 'Saved signal analyses' : `Trades for ${new Date(`${historyDate}T12:00:00`).toLocaleDateString()}`}</h2><p className="muted text-xs mt-2">Each setup shows the profit or loss for every 0.01-lot entry.</p></div><span className="count">{filteredHistory.length + (latest && (historyDate === 'all' || latest.signal_date === historyDate) ? 1 : 0)}</span></div>{filteredHistory.map((item) => renderAnalysis(item, item.id))}{!filteredHistory.length && !latest && <div className="empty-table">No signal analyses saved for this date.</div>}</div>
   </div>;
 }
 

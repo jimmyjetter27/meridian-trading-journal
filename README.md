@@ -1,6 +1,6 @@
 # Meridian
 
-A local-first Electron + React trading journal with a read-only MT5 adapter. The interface includes account and asset filters, rolling metrics, per-trade P/L percentages, a realized P&L curve, cash-flow history, daily/weekly/monthly growth, active-position risk, account projections, reusable capital calculators, saved TP1 signal analysis against broker tick history, journal annotations, CSV import, portable backup/restore, diagnostics, and session price/email alerts. Meridian cannot place orders or close positions.
+A local-first Electron + React trading journal with a read-only MT5 adapter. The interface includes account and asset filters, rolling metrics, per-trade P/L percentages, a realized P&L curve, cash-flow history, daily/weekly/monthly growth, active-position risk, account projections, reusable capital calculators, date-filtered TP1 signal analysis and daily signal P/L against broker tick history, journal annotations, CSV import, portable backup/restore, diagnostics, and session price/email alerts. Meridian cannot place orders or close positions.
 
 ## Run
 
