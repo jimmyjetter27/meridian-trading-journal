@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Local-first trading journal and confirmed MT5 bridge client",
+  "description": "Local-first, journal-only MT5 trading journal",
   "author": "Meridian",
   "main": "electron/main.js",
   "scripts": {

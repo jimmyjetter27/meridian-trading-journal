@@ -571,7 +571,7 @@ function App() {
         </div>
         <div className="workspace-label">PERSONAL WORKSPACE</div>
         <nav>
-          {['Overview', 'Trade journal', 'Returns', 'Daily journal', 'Active trades', 'Trade chart', 'Execution'].map((name, i) => (
+          {['Overview', 'Trade journal', 'Returns', 'Daily journal', 'Active trades', 'Trade chart'].map((name, i) => (
             <button
               key={name}
               className={tab === name ? 'nav active' : 'nav'}
@@ -585,7 +585,7 @@ function App() {
         <div className="workspace-label mt-8">BROKER ACCOUNTS</div>
         {[
           'All',
-          ...new Set(['Exness', 'XM', 'Vantage', ...data.accounts.map((a) => a.broker_name)]),
+          ...new Set(['Exness', 'VTMarkets', 'XM', 'Vantage', ...data.accounts.map((a) => a.broker_name)]),
         ].map((broker, i) => (
           <button
             key={broker}
@@ -634,7 +634,7 @@ function App() {
               ● {data.status || 'Offline'}
             </span>
             <select
-              aria-label="Active execution and import account"
+              aria-label="Active journal and import account"
               value={data.activeAccount || ''}
               disabled={busy}
               onChange={(e) =>
@@ -661,10 +661,10 @@ function App() {
             <div>
               <div className="eyebrow">YOUR PROCESS. YOUR PROGRESS.</div>
               <h1>
-                {{ Overview: 'Performance overview', 'Trade journal': 'Trade journal', Returns: 'Returns on capital', 'Daily journal': 'Daily journal', 'Active trades': 'Active trades', 'Trade chart': 'Trade chart', Execution: 'Execution terminal' }[tab]}
+                {{ Overview: 'Performance overview', 'Trade journal': 'Trade journal', Returns: 'Returns on capital', 'Daily journal': 'Daily journal', 'Active trades': 'Active trades', 'Trade chart': 'Trade chart' }[tab]}
               </h1>
               <p className="muted mt-2">
-                {tab === 'Returns' ? 'Measure each period’s realized result against its opening capital.' : tab === 'Daily journal' ? 'Review the behavior and context behind each trading day.' : tab === 'Active trades' ? 'Your open MT5 positions and their live risk.' : tab === 'Trade chart' ? 'See each entry and exit in its market context.' : tab === 'Execution' ? 'A deliberate decision before every trade.' : 'A clearer view of every trade, across every account.'}
+                {tab === 'Returns' ? 'Measure each period’s realized result against its opening capital.' : tab === 'Daily journal' ? 'Review the behavior and context behind each trading day.' : tab === 'Active trades' ? 'Your open MT5 positions and their live risk.' : tab === 'Trade chart' ? 'See each entry and exit in its market context.' : 'A clearer view of every trade, across every account.'}
               </p>
             </div>
             {journalTab && <div className="flex gap-3">
@@ -1265,6 +1265,7 @@ function Settings({ data, active, task, refresh, importFile, report, setToast })
                   ...f,
                   ...(account ? { id: account.id } : {}),
                   starting_balance: Number(f.starting_balance),
+                  tracking_since: f.tracking_since || '2000-01-01T00:00:00.000Z',
                 }))
               }
               className="form-grid"
@@ -1306,6 +1307,7 @@ function Settings({ data, active, task, refresh, importFile, report, setToast })
                 required
               />
               <Field label="MT5 login ID" name="login_id" defaultValue={account?.login_id || ''} />
+              <input type="hidden" name="tracking_since" value={account?.tracking_since || '2000-01-01T00:00:00.000Z'} />
               <Field
                 label="MT5 server name"
                 name="server_name"

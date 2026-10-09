@@ -11,6 +11,7 @@ export const accountSchema = z.object({
   login_id: z.string().max(100).default(''),
   server_name: z.string().max(120).default(''),
   terminal_path: z.string().max(1024).default('C:\\Program Files\\MetaTrader 5\\terminal64.exe'),
+  tracking_since: z.string().datetime().default('2000-01-01T00:00:00.000Z'),
 });
 export const mappingSchema = z.object({
   broker_name: text,

@@ -111,7 +111,8 @@ else
         .prepare(
           `UPDATE accounts SET broker_name=@broker_name,account_type=@account_type,
           base_currency=@base_currency,display_name=@display_name,starting_balance=@starting_balance,
-          login_id=@login_id,server_name=@server_name,terminal_path=@terminal_path WHERE id=@id`,
+          login_id=@login_id,server_name=@server_name,terminal_path=@terminal_path,
+          tracking_since=@tracking_since WHERE id=@id`,
         )
         .run(row);
       if (!result.changes) throw Error('Account not found');
@@ -406,24 +407,6 @@ else
       adapter.stop();
       return bridge.connect(c.url, c.token).then(() => true);
     });
-    handle('trade:prepare', (input) =>
-      engine.prepare(z.enum(['place', 'close']).parse(input?.action), input?.order),
-    );
-    for (const [channel, action] of [
-      ['trade:place-order', 'place'],
-      ['trade:close-position', 'close'],
-    ])
-      handle(channel, async (input) => {
-        const result = await engine.execute(action, z.string().uuid().parse(input));
-        void alerts.notify(
-          result.ok ? 'Trade acknowledged' : 'Trade needs attention',
-          result.ok
-            ? `MT5 returned ${result.result.retcode}. See the execution log.`
-            : result.diagnostic.title,
-        );
-        return result;
-      });
-    handle('trade:reconcile', (input) => engine.reconcile(input));
     handle('alerts:add', (input) => {
       const a = engine.account();
       const p = z

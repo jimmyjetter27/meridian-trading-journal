@@ -65,7 +65,8 @@ test('account schema migration provides an account-specific MT5 terminal path', 
   try {
     const account = publicAccounts(db)[0];
     assert.equal(account.terminal_path, 'C:\\Program Files\\MetaTrader 5\\terminal64.exe');
-    assert.equal(db.pragma('user_version', { simple: true }), 5);
+    assert.equal(account.tracking_since, '2000-01-01T00:00:00.000Z');
+    assert.equal(db.pragma('user_version', { simple: true }), 6);
   } finally {
     db.close();
   }
@@ -179,11 +180,19 @@ function execution(db, send) {
           }
         : send(method, params, id),
   };
-  const engine = new ExecutionEngine(db, bridge);
+  const engine = new ExecutionEngine(db, bridge, { executionEnabled: true });
   engine.select(1);
   return engine;
 }
 const order = { asset: 'XAUUSD', type: 'BUY', kind: 'MARKET', lots: 0.1, stop_loss: 1990 };
+test('execution is disabled by default for the journal application', async () => {
+  const db = fixture();
+  try {
+    const engine = new ExecutionEngine(db, { request: async () => { throw Error('must not call bridge'); } });
+    engine.select(1);
+    await assert.rejects(engine.prepare('place', order), /journal-only/);
+  } finally { db.close(); }
+});
 test('confirmation binds exact symbol, risk, account, and single-use request ID', async () => {
   const db = fixture();
   let calls = 0;

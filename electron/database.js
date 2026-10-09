@@ -2,7 +2,7 @@ import Database from 'better-sqlite3';
 import { accountSchema, mappingSchema, tradeSchema } from '../shared/contracts.js';
 import { z } from 'zod';
 export const schema = `
-CREATE TABLE IF NOT EXISTS accounts(id INTEGER PRIMARY KEY,broker_name TEXT NOT NULL,account_type TEXT NOT NULL,base_currency TEXT NOT NULL,display_name TEXT NOT NULL,starting_balance REAL NOT NULL DEFAULT 0 CHECK(starting_balance>=0),login_id TEXT NOT NULL DEFAULT '',master_password_encrypted TEXT NOT NULL DEFAULT '',server_name TEXT NOT NULL DEFAULT '',terminal_path TEXT NOT NULL DEFAULT 'C:\\Program Files\\MetaTrader 5\\terminal64.exe');
+CREATE TABLE IF NOT EXISTS accounts(id INTEGER PRIMARY KEY,broker_name TEXT NOT NULL,account_type TEXT NOT NULL,base_currency TEXT NOT NULL,display_name TEXT NOT NULL,starting_balance REAL NOT NULL DEFAULT 0 CHECK(starting_balance>=0),login_id TEXT NOT NULL DEFAULT '',master_password_encrypted TEXT NOT NULL DEFAULT '',server_name TEXT NOT NULL DEFAULT '',terminal_path TEXT NOT NULL DEFAULT 'C:\\Program Files\\MetaTrader 5\\terminal64.exe',tracking_since TEXT NOT NULL DEFAULT '2000-01-01T00:00:00.000Z');
 CREATE TABLE IF NOT EXISTS symbol_mappings(id INTEGER PRIMARY KEY,broker_name TEXT NOT NULL,standard_symbol TEXT NOT NULL,broker_symbol TEXT NOT NULL,UNIQUE(broker_name,broker_symbol),UNIQUE(broker_name,standard_symbol));
 CREATE TABLE IF NOT EXISTS trades(id INTEGER PRIMARY KEY,ticket_number TEXT NOT NULL UNIQUE,account_id INTEGER NOT NULL REFERENCES accounts(id),standard_symbol TEXT NOT NULL,type TEXT NOT NULL CHECK(type IN ('BUY','SELL')),lot_size REAL NOT NULL CHECK(lot_size>0),open_price REAL NOT NULL,close_price REAL NOT NULL,open_time TEXT NOT NULL,close_time TEXT NOT NULL,net_pnl REAL NOT NULL,pips REAL,status TEXT NOT NULL CHECK(status IN ('WIN','LOSS','BE')),setup_tags TEXT NOT NULL DEFAULT '[]',mistake_tags TEXT NOT NULL DEFAULT '[]',notes TEXT NOT NULL DEFAULT '');
 CREATE INDEX IF NOT EXISTS trades_filter ON trades(account_id,standard_symbol,close_time);
@@ -33,13 +33,16 @@ export function openDatabase(path) {
       "ALTER TABLE accounts ADD COLUMN terminal_path TEXT NOT NULL DEFAULT 'C:\\Program Files\\MetaTrader 5\\terminal64.exe'",
     );
   }
-  db.pragma('user_version=5');
+  if (!columns.has('tracking_since')) {
+    db.exec("ALTER TABLE accounts ADD COLUMN tracking_since TEXT NOT NULL DEFAULT '2000-01-01T00:00:00.000Z'");
+  }
+  db.pragma('user_version=6');
   return db;
 }
 export const publicAccounts = (db) =>
   db
     .prepare(
-      'SELECT id,broker_name,account_type,base_currency,display_name,starting_balance,login_id,server_name,terminal_path FROM accounts ORDER BY id',
+      'SELECT id,broker_name,account_type,base_currency,display_name,starting_balance,login_id,server_name,terminal_path,tracking_since FROM accounts ORDER BY id',
     )
     .all();
 export function insertObject(db, table, row, ignore = false) {

@@ -61,7 +61,7 @@ export async function syncMt5History(db, bridge, account, initialSnapshot) {
   const history = historySchema.parse(
     await bridge.request(
       'history.closed-trades',
-      { date_from: '2000-01-01T00:00:00Z' },
+      { date_from: account.tracking_since || '2000-01-01T00:00:00.000Z' },
       undefined,
       60000,
     ),

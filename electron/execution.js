@@ -26,9 +26,10 @@ const positionSchema = z.object({
   server_name: z.string(),
 });
 export class ExecutionEngine {
-  constructor(db, bridge) {
+  constructor(db, bridge, { executionEnabled = false } = {}) {
     this.db = db;
     this.bridge = bridge;
+    this.executionEnabled = executionEnabled;
     this.activeAccount = null;
     this.revision = 0;
     this.confirmations = new Map();
@@ -62,6 +63,7 @@ export class ExecutionEngine {
     return { account_id: a.id, login_id: a.login_id, server_name: a.server_name };
   }
   async prepare(action, input) {
+    if (!this.executionEnabled) throw Error('Meridian is journal-only; trade execution is disabled');
     const a = this.account(),
       revision = this.revision;
     let payload, summary;
@@ -153,6 +155,7 @@ export class ExecutionEngine {
     };
   }
   async execute(action, token) {
+    if (!this.executionEnabled) throw Error('Meridian is journal-only; trade execution is disabled');
     if (this.busy) throw Error('An execution request is already in progress');
     const c = this.confirmations.get(token);
     this.confirmations.delete(token);
@@ -210,6 +213,7 @@ export class ExecutionEngine {
     }
   }
   async reconcile(id) {
+    if (!this.executionEnabled) throw Error('Meridian is journal-only; trade execution is disabled');
     const row = this.db
       .prepare("SELECT * FROM execution_log WHERE id=? AND state IN ('UNKNOWN','SENDING')")
       .get(z.string().uuid().parse(id));

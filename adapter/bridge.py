@@ -344,7 +344,7 @@ class Adapter:
         if method == "fx.rate":
             return self.fx_rate(params)
         if method in ("trade.place", "trade.close", "trade.status", "position.snapshot"):
-            raise PermissionError("Live execution is disabled in the read-only adapter")
+            raise PermissionError("Meridian is permanently journal-only; trade execution is disabled")
         raise ValueError(f"Unsupported method: {method}")
 
 

@@ -7,8 +7,8 @@ import { syncMt5History } from '../electron/mt5Sync.js';
 
 const userData = join(process.env.APPDATA || process.cwd(), 'meridian-trading-journal');
 const db = openDatabase(join(userData, 'journal.db'));
-const accounts = db.prepare("SELECT * FROM accounts WHERE lower(broker_name)='exness'").all();
-if (!accounts.length) throw Error('No Exness account profile is configured');
+const accounts = db.prepare('SELECT * FROM accounts ORDER BY id').all();
+if (!accounts.length) throw Error('No MT5 account profile is configured');
 await db.backup(join(userData, `journal-before-mt5-sync-${Date.now()}.db`));
 
 const token = randomBytes(32).toString('hex');
