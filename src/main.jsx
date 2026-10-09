@@ -90,6 +90,7 @@ const number = (value, digits = 2) =>
 function ActiveTrades({ account, onError, fx }) {
   const [snapshot, setSnapshot] = useState(null);
   const [selectedPosition, setSelectedPosition] = useState(null);
+  const [selectedOrder, setSelectedOrder] = useState(null);
   const [loading, setLoading] = useState(false);
   async function load() {
     if (!account) return;
@@ -110,6 +111,7 @@ function ActiveTrades({ account, onError, fx }) {
     return () => clearInterval(timer);
   }, [account?.id]);
   const positions = snapshot?.positions || [];
+  const pendingOrders = snapshot?.pending_orders || [];
   const protectedRisk = positions.reduce((sum, position) => sum + Number(position.risk_amount || 0), 0);
   const unprotected = positions.filter((position) => !position.stop_loss).length;
   return (
@@ -117,7 +119,7 @@ function ActiveTrades({ account, onError, fx }) {
       <section className="panel live-summary">
         <div>
           <div className="live-indicator"><span /> LIVE FROM MT5</div>
-          <h2>{positions.length} active {positions.length === 1 ? 'trade' : 'trades'}</h2>
+          <h2>{positions.length} active · {pendingOrders.length} pending</h2>
           <p className="muted mt-2">{account ? `${account.display_name} · ${account.server_name}` : 'Select an account above.'}</p>
         </div>
         <div className="live-totals">
@@ -131,6 +133,10 @@ function ActiveTrades({ account, onError, fx }) {
           </strong>
           <button onClick={load} disabled={!account || loading}>{loading ? 'Refreshing…' : '↻ Refresh'}</button>
         </div>
+      </section>
+      <section className="panel table-panel pending-orders-panel">
+        <div className="table-heading"><div><h2>Pending orders <span className="count">{pendingOrders.length}</span></h2><p className="muted text-xs mt-2">Read-only orders waiting for their entry price. Click a row for details.</p></div><small className="muted">Auto-refreshes every 5 seconds</small></div>
+        <div className="table-scroll"><table><thead><tr><th>Created / ticket</th><th>Symbol</th><th>Order</th><th>Lots</th><th>Entry</th><th>Current</th><th>Distance</th><th>Risk at SL</th></tr></thead><tbody>{pendingOrders.map((order) => <tr key={order.order_id} onClick={() => setSelectedOrder(order)}><td>{new Date(order.created_at).toLocaleString()}<small>#{order.order_id}</small></td><td className="font-semibold">{order.standard_symbol}<small>{order.symbol}</small></td><td><span className={order.side === 'BUY' ? 'buy' : 'sell'}>{order.type}</span></td><td>{order.lots}</td><td>{number(order.entry, 6)}</td><td>{number(order.current_price, 6)}</td><td>{number(order.distance_to_entry_points, 1)} pts</td><td className={!order.stop_loss ? 'negative' : ''}>{order.stop_loss ? <><MoneyValue value={order.risk_amount || 0} currency={snapshot?.currency} fx={fx} /><small>{number(order.risk_pct, 2)}% of balance</small></> : 'No stop loss'}</td></tr>)}</tbody></table>{!loading && account && !pendingOrders.length && <div className="empty-table">No pending orders on this MT5 account.</div>}</div>
       </section>
       <section className="panel table-panel">
         <div className="table-heading"><div><h2>Open positions</h2><p className="muted text-xs mt-2">Click any row for full position details.</p></div><small className="muted">Auto-refreshes every 5 seconds</small></div>
@@ -158,6 +164,13 @@ function ActiveTrades({ account, onError, fx }) {
           'Swap': moneyPairText(selectedPosition.swap, snapshot?.currency, fx), 'Comment': selectedPosition.comment || '—',
         }).map(([key, value]) => <React.Fragment key={key}><dt>{key}</dt><dd>{value}</dd></React.Fragment>)}</dl>
       </Modal>}
+      {selectedOrder && <Modal title={`${selectedOrder.type} · order #${selectedOrder.order_id}`} onClose={() => setSelectedOrder(null)}><dl className="review position-review">{Object.entries({
+        'Status': 'Pending — read only', 'Created': new Date(selectedOrder.created_at).toLocaleString(), 'Broker symbol': selectedOrder.symbol,
+        'Volume': `${selectedOrder.lots} lots`, 'Requested entry': number(selectedOrder.entry, 6), 'Current price': number(selectedOrder.current_price, 6),
+        'Distance to entry': `${number(selectedOrder.distance_to_entry_points, 1)} points`, 'Take profit': selectedOrder.take_profit ? number(selectedOrder.take_profit, 6) : 'Not set',
+        'Stop loss': selectedOrder.stop_loss ? number(selectedOrder.stop_loss, 6) : 'Not set', 'Risk at stop': selectedOrder.stop_loss ? `${moneyPairText(selectedOrder.risk_amount || 0, snapshot?.currency, fx)} · ${number(selectedOrder.risk_pct, 2)}% of balance` : 'Unbounded — no stop loss',
+        'Expiration': selectedOrder.expiration ? new Date(selectedOrder.expiration).toLocaleString() : 'Good till cancelled', 'Comment': selectedOrder.comment || '—',
+      }).map(([key, value]) => <React.Fragment key={key}><dt>{key}</dt><dd>{value}</dd></React.Fragment>)}</dl></Modal>}
     </>
   );
 }

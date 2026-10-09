@@ -44,7 +44,8 @@ try {
     60000,
   );
   const positions = await bridge.request('positions.active', {});
-  const ghs = await bridge.request('fx.rate', { base: 'USD', quote: 'GHS' });
+  let ghs = null;
+  try { ghs = await bridge.request('fx.rate', { base: 'USD', quote: 'GHS' }); } catch { /* Optional broker symbol. */ }
   const chartSymbol = positions.positions[0]?.symbol || history.trades.at(-1)?.broker_symbol;
   const chart = chartSymbol
     ? await bridge.request('chart.snapshot', {
@@ -65,10 +66,11 @@ try {
       dealCount: history.deal_count,
       symbols: [...new Set(history.trades.map((trade) => trade.broker_symbol))].sort(),
       activePositions: positions.positions.length,
+      pendingOrders: positions.pending_orders?.length || 0,
       chartSymbol,
       candles: chart.candles.length,
       chartTimeframe: chart.timeframe,
-      usdGhs: { symbol: ghs.symbol, bid: ghs.bid, ask: ghs.ask, timestamp: ghs.timestamp },
+      usdGhs: ghs ? { symbol: ghs.symbol, bid: ghs.bid, ask: ghs.ask, timestamp: ghs.timestamp } : null,
     }),
   );
   bridge.disconnect();

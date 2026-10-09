@@ -209,8 +209,11 @@ class Adapter:
     def active_positions(self):
         account, _terminal = self.connect()
         positions = mt5.positions_get()
+        orders = mt5.orders_get()
         if positions is None:
             raise RuntimeError(f"MT5 positions request failed: {mt5.last_error()}")
+        if orders is None:
+            raise RuntimeError(f"MT5 pending-order request failed: {mt5.last_error()}")
         rows = []
         for position in positions:
             info = mt5.symbol_info(position.symbol)
@@ -263,6 +266,62 @@ class Adapter:
                 "magic": int(position.magic),
                 "comment": position.comment or "",
             })
+        pending_rows = []
+        order_names = {
+            mt5.ORDER_TYPE_BUY_LIMIT: "BUY LIMIT",
+            mt5.ORDER_TYPE_SELL_LIMIT: "SELL LIMIT",
+            mt5.ORDER_TYPE_BUY_STOP: "BUY STOP",
+            mt5.ORDER_TYPE_SELL_STOP: "SELL STOP",
+            mt5.ORDER_TYPE_BUY_STOP_LIMIT: "BUY STOP LIMIT",
+            mt5.ORDER_TYPE_SELL_STOP_LIMIT: "SELL STOP LIMIT",
+        }
+        buy_types = {
+            mt5.ORDER_TYPE_BUY_LIMIT,
+            mt5.ORDER_TYPE_BUY_STOP,
+            mt5.ORDER_TYPE_BUY_STOP_LIMIT,
+        }
+        for order in orders:
+            if order.type not in order_names:
+                continue
+            info = mt5.symbol_info(order.symbol)
+            tick = mt5.symbol_info_tick(order.symbol)
+            point = float(info.point) if info and info.point else 0.0
+            is_buy = order.type in buy_types
+            current_price = float(tick.ask if is_buy else tick.bid) if tick else float(order.price_current)
+            volume = float(order.volume_current or order.volume_initial)
+            stop_loss = float(order.sl)
+            risk_amount = None
+            if stop_loss > 0 and volume > 0:
+                calculated = mt5.order_calc_profit(
+                    mt5.ORDER_TYPE_BUY if is_buy else mt5.ORDER_TYPE_SELL,
+                    order.symbol,
+                    volume,
+                    float(order.price_open),
+                    stop_loss,
+                )
+                if calculated is not None:
+                    risk_amount = max(0.0, -float(calculated))
+            expiration = int(order.time_expiration or 0)
+            pending_rows.append({
+                "order_id": str(order.ticket),
+                "symbol": order.symbol,
+                "standard_symbol": canonical_symbol(order.symbol),
+                "type": order_names[order.type],
+                "side": "BUY" if is_buy else "SELL",
+                "lots": volume,
+                "created_at": iso_time(0, order.time_setup),
+                "entry": float(order.price_open),
+                "current_price": current_price,
+                "stop_loss": stop_loss,
+                "take_profit": float(order.tp),
+                "distance_to_entry_points": abs(current_price - float(order.price_open)) / point if point and current_price else None,
+                "risk_amount": risk_amount,
+                "risk_pct": (risk_amount / float(account.balance) * 100.0)
+                if risk_amount is not None and float(account.balance) > 0
+                else None,
+                "expiration": iso_time(0, expiration) if expiration > int(order.time_setup) else None,
+                "comment": order.comment or "",
+            })
         return {
             "login_id": str(account.login),
             "server_name": account.server,
@@ -270,6 +329,7 @@ class Adapter:
             "balance": float(account.balance),
             "equity": float(account.equity),
             "positions": rows,
+            "pending_orders": pending_rows,
             "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         }
 
