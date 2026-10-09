@@ -15,6 +15,8 @@ CREATE TABLE IF NOT EXISTS app_settings(key TEXT PRIMARY KEY,value TEXT NOT NULL
 CREATE TABLE IF NOT EXISTS capital_events(id INTEGER PRIMARY KEY,account_id INTEGER NOT NULL REFERENCES accounts(id),ticket_number TEXT NOT NULL,occurred_at TEXT NOT NULL,amount REAL NOT NULL,kind TEXT NOT NULL DEFAULT '',comment TEXT NOT NULL DEFAULT '',UNIQUE(account_id,ticket_number));
 CREATE INDEX IF NOT EXISTS capital_events_time ON capital_events(account_id,occurred_at);
 CREATE TABLE IF NOT EXISTS account_balances(account_id INTEGER PRIMARY KEY REFERENCES accounts(id),balance REAL NOT NULL,captured_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS signal_analyses(id INTEGER PRIMARY KEY,account_id INTEGER NOT NULL REFERENCES accounts(id),signal_date TEXT NOT NULL,setup_number INTEGER NOT NULL,standard_symbol TEXT NOT NULL,broker_symbol TEXT NOT NULL,side TEXT NOT NULL CHECK(side IN ('BUY','SELL')),zone_low REAL NOT NULL,zone_high REAL NOT NULL,stop_loss REAL NOT NULL,take_profit REAL NOT NULL,lot_size REAL NOT NULL DEFAULT 0.01 CHECK(lot_size=0.01),starting_balance REAL NOT NULL,raw_setup TEXT NOT NULL,raw_outcome TEXT NOT NULL DEFAULT '',result_json TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,UNIQUE(account_id,signal_date,setup_number));
+CREATE INDEX IF NOT EXISTS signal_analyses_date ON signal_analyses(signal_date DESC,setup_number DESC);
 `;
 export function openDatabase(path) {
   const db = new Database(path);
@@ -36,7 +38,7 @@ export function openDatabase(path) {
   if (!columns.has('tracking_since')) {
     db.exec("ALTER TABLE accounts ADD COLUMN tracking_since TEXT NOT NULL DEFAULT '2000-01-01T00:00:00.000Z'");
   }
-  db.pragma('user_version=6');
+  db.pragma('user_version=7');
   return db;
 }
 export const publicAccounts = (db) =>
@@ -66,6 +68,7 @@ export function packageData(db) {
     app_settings: db.prepare('SELECT * FROM app_settings').all(),
     capital_events: db.prepare('SELECT * FROM capital_events').all(),
     account_balances: db.prepare('SELECT * FROM account_balances').all(),
+    signal_analyses: db.prepare('SELECT * FROM signal_analyses').all(),
   };
 }
 const portable = z.object({
@@ -89,14 +92,21 @@ const portable = z.object({
   app_settings: z.array(z.object({ key: z.string(), value: z.string() })).max(1000).default([]),
   capital_events: z.array(z.object({ id: z.number().int().positive(), account_id: z.number().int().positive(), ticket_number: z.string(), occurred_at: z.string(), amount: z.number(), kind: z.string(), comment: z.string() })).max(1000000).default([]),
   account_balances: z.array(z.object({ account_id: z.number().int().positive(), balance: z.number(), captured_at: z.string() })).max(10000).default([]),
+  signal_analyses: z.array(z.object({
+    id: z.number().int().positive(), account_id: z.number().int().positive(), signal_date: z.string(),
+    setup_number: z.number().int().positive(), standard_symbol: z.string(), broker_symbol: z.string(),
+    side: z.enum(['BUY', 'SELL']), zone_low: z.number(), zone_high: z.number(), stop_loss: z.number(),
+    take_profit: z.number(), lot_size: z.literal(0.01), starting_balance: z.number(), raw_setup: z.string(),
+    raw_outcome: z.string(), result_json: z.string(), created_at: z.string(), updated_at: z.string(),
+  })).max(100000).default([]),
 });
 export function restorePackage(db, input) {
   const data = portable.parse(input);
   db.transaction(() => {
     db.exec(
-      'DELETE FROM execution_log; DELETE FROM price_alerts; DELETE FROM capital_events; DELETE FROM account_balances; DELETE FROM daily_entries; DELETE FROM trades; DELETE FROM symbol_mappings; DELETE FROM accounts; DELETE FROM app_settings;',
+      'DELETE FROM execution_log; DELETE FROM price_alerts; DELETE FROM capital_events; DELETE FROM account_balances; DELETE FROM signal_analyses; DELETE FROM daily_entries; DELETE FROM trades; DELETE FROM symbol_mappings; DELETE FROM accounts; DELETE FROM app_settings;',
     );
-    for (const table of ['accounts', 'symbol_mappings', 'trades', 'daily_entries', 'price_alerts', 'capital_events', 'account_balances', 'app_settings'])
+    for (const table of ['accounts', 'symbol_mappings', 'trades', 'daily_entries', 'price_alerts', 'capital_events', 'account_balances', 'signal_analyses', 'app_settings'])
       for (const row of data[table]) insertObject(db, table, row);
     db.prepare("INSERT OR IGNORE INTO app_settings(key,value) VALUES('alert_mode','tone')").run();
   })();

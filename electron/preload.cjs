@@ -12,6 +12,8 @@ const channels = [
   'mt5:fx-rate',
   'daily:save',
   'returns:read',
+  'signals:analyze',
+  'signals:delete',
   'mappings:save',
   'csv:import',
   'journal:export',

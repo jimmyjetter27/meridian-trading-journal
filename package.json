@@ -16,6 +16,7 @@
     "format": "prettier --write .",
     "smoke": "electron scripts/smoke.js",
     "probe:mt5": "node scripts/probe-adapter.js",
+    "probe:signal": "node scripts/probe-signal.js",
     "sync:mt5": "electron scripts/sync-local-journal.js"
   },
   "dependencies": {

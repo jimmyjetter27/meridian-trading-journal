@@ -3,6 +3,7 @@ import json
 import math
 import os
 import signal
+import statistics
 import sys
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
@@ -374,6 +375,129 @@ class Adapter:
             "candles": candles,
         }
 
+    def _estimated_round_trip_fee(self, symbol):
+        start = datetime.now(timezone.utc) - timedelta(days=365)
+        deals = mt5.history_deals_get(start, datetime.now(timezone.utc)) or []
+        positions = defaultdict(list)
+        for deal in deals:
+            if deal.symbol == symbol and deal.type in (mt5.DEAL_TYPE_BUY, mt5.DEAL_TYPE_SELL):
+                positions[int(deal.position_id)].append(deal)
+        samples = []
+        for group in positions.values():
+            entries = [deal for deal in group if deal.entry == mt5.DEAL_ENTRY_IN]
+            exits = [deal for deal in group if deal.entry in (mt5.DEAL_ENTRY_OUT, mt5.DEAL_ENTRY_OUT_BY)]
+            volume = sum(float(deal.volume) for deal in entries)
+            if volume <= 0 or not exits:
+                continue
+            costs = sum(float(deal.commission) + float(getattr(deal, "fee", 0.0)) for deal in group)
+            samples.append(costs / volume)
+        return (statistics.median(samples), len(samples)) if samples else (0.0, 0)
+
+    def signal_backtest(self, params):
+        account, _terminal = self.connect()
+        symbol = params["symbol"]
+        info = mt5.symbol_info(symbol)
+        if info is None:
+            raise RuntimeError(f"Symbol {symbol} is unavailable: {mt5.last_error()}")
+        if not info.visible and not mt5.symbol_select(symbol, True):
+            raise RuntimeError(f"Symbol {symbol} could not be selected: {mt5.last_error()}")
+        date_from = datetime.fromisoformat(params["date_from"].replace("Z", "+00:00"))
+        date_to = datetime.fromisoformat(params["date_to"].replace("Z", "+00:00"))
+        ticks = mt5.copy_ticks_range(symbol, date_from, date_to, mt5.COPY_TICKS_ALL)
+        if ticks is None:
+            raise RuntimeError(f"MT5 tick history request failed: {mt5.last_error()}")
+        usable = [tick for tick in ticks if float(tick["bid"]) > 0 and float(tick["ask"]) > 0]
+        if not usable:
+            raise RuntimeError(f"No broker tick history is available for {symbol} on this date")
+        side = params["side"]
+        order_type = mt5.ORDER_TYPE_BUY if side == "BUY" else mt5.ORDER_TYPE_SELL
+        lot_size = float(params["lot_size"])
+        zone_low = float(params["zone_low"])
+        zone_high = float(params["zone_high"])
+        stop_loss = float(params["stop_loss"])
+        take_profit = float(params["take_profit"])
+        fee_per_lot, fee_sample_size = self._estimated_round_trip_fee(symbol)
+        fee = fee_per_lot * lot_size
+        spreads = [float(tick["ask"]) - float(tick["bid"]) for tick in usable]
+        median_spread = statistics.median(spreads)
+        point = float(info.point or info.trade_tick_size or 0.0)
+
+        def stamp(tick):
+            return iso_time(int(tick["time_msc"]), int(tick["time"]))
+
+        def calculate(entry, exit_price, status, entry_time=None, exit_time=None, reported_pips=None, source="broker ticks", signal_entry=None):
+            gross = mt5.order_calc_profit(order_type, symbol, lot_size, entry, exit_price)
+            if gross is None:
+                tick_size = float(info.trade_tick_size or info.point)
+                tick_value = float(info.trade_tick_value_profit or info.trade_tick_value)
+                direction = 1 if side == "BUY" else -1
+                gross = ((exit_price - entry) * direction / tick_size) * tick_value * lot_size
+            return {
+                "entry": float(entry),
+                "signal_entry": float(signal_entry) if signal_entry is not None else None,
+                "exit": float(exit_price),
+                "entry_time": entry_time,
+                "exit_time": exit_time,
+                "status": status,
+                "gross_pnl": float(gross),
+                "estimated_fees": float(fee),
+                "net_pnl": float(gross) + float(fee),
+                "reported_pips": reported_pips,
+                "source": source,
+            }
+
+        reported = params.get("reported_entries") or []
+        trades = []
+        if reported and (params.get("tp1_confirmed") or params.get("stop_confirmed")):
+            signal_exit = take_profit if params.get("tp1_confirmed") else stop_loss
+            status = "TP1" if params.get("tp1_confirmed") else "SL"
+            for item in reported:
+                signal_entry = float(item["entry"])
+                entry_price = signal_entry + median_spread if side == "BUY" else signal_entry
+                exit_price = signal_exit if side == "BUY" else signal_exit + median_spread
+                trades.append(calculate(entry_price, exit_price, status, reported_pips=item.get("reported_pips"), source="confirmed update + historical spread", signal_entry=signal_entry))
+        else:
+            entry_index = None
+            entry_price = None
+            for index, tick in enumerate(usable):
+                candidate = float(tick["ask"] if side == "BUY" else tick["bid"])
+                if zone_low <= candidate <= zone_high:
+                    entry_index = index
+                    entry_price = candidate
+                    break
+            if entry_index is None:
+                return {
+                    "login_id": str(account.login), "server_name": account.server,
+                    "currency": account.currency, "symbol": symbol, "trades": [],
+                    "median_spread": median_spread, "spread_points": median_spread / point if point else None,
+                    "fee_per_lot": fee_per_lot, "fee_sample_size": fee_sample_size,
+                    "market_status": "ZONE_NOT_REACHED", "tick_count": len(usable),
+                }
+            entry_tick = usable[entry_index]
+            exit_tick = None
+            exit_price = None
+            status = "OPEN_AT_DAY_END"
+            for tick in usable[entry_index:]:
+                candidate = float(tick["bid"] if side == "BUY" else tick["ask"])
+                stopped = candidate <= stop_loss if side == "BUY" else candidate >= stop_loss
+                targeted = candidate >= take_profit if side == "BUY" else candidate <= take_profit
+                if stopped or targeted:
+                    exit_tick = tick
+                    exit_price = stop_loss if stopped else take_profit
+                    status = "SL" if stopped else "TP1"
+                    break
+            if exit_tick is None:
+                exit_tick = usable[-1]
+                exit_price = float(exit_tick["bid"] if side == "BUY" else exit_tick["ask"])
+            trades.append(calculate(entry_price, exit_price, status, stamp(entry_tick), stamp(exit_tick)))
+        return {
+            "login_id": str(account.login), "server_name": account.server,
+            "currency": account.currency, "symbol": symbol, "trades": trades,
+            "median_spread": median_spread, "spread_points": median_spread / point if point else None,
+            "fee_per_lot": fee_per_lot, "fee_sample_size": fee_sample_size,
+            "market_status": trades[0]["status"] if trades else "UNKNOWN", "tick_count": len(usable),
+        }
+
     def fx_rate(self, params):
         account, _terminal = self.connect()
         base = (params.get("base") or account.currency).upper()
@@ -420,6 +544,8 @@ class Adapter:
             return self.active_positions()
         if method == "chart.snapshot":
             return self.chart_snapshot(params)
+        if method == "signal.backtest":
+            return self.signal_backtest(params)
         if method == "fx.rate":
             return self.fx_rate(params)
         if method in ("trade.place", "trade.close", "trade.status", "position.snapshot"):

@@ -14,6 +14,7 @@ import { ExecutionEngine } from '../electron/execution.js';
 import { diagnose } from '../electron/diagnostics.js';
 import { syncMt5History } from '../electron/mt5Sync.js';
 import { calculatePeriodReturns } from '../electron/returns.js';
+import { parseSignalText, stripSignalDecorations, summarizeSignalAnalysis } from '../electron/signals.js';
 function fixture() {
   const db = openDatabase(':memory:');
   insertObject(db, 'accounts', {
@@ -66,7 +67,7 @@ test('account schema migration provides an account-specific MT5 terminal path', 
     const account = publicAccounts(db)[0];
     assert.equal(account.terminal_path, 'C:\\Program Files\\MetaTrader 5\\terminal64.exe');
     assert.equal(account.tracking_since, '2000-01-01T00:00:00.000Z');
-    assert.equal(db.pragma('user_version', { simple: true }), 6);
+    assert.equal(db.pragma('user_version', { simple: true }), 7);
   } finally {
     db.close();
   }
@@ -115,10 +116,18 @@ test('restore validates first, strips secrets, and rolls back broken references'
   const db = fixture();
   try {
     importCsv(db, csv, 1);
+    insertObject(db, 'signal_analyses', {
+      id: 1, account_id: 1, signal_date: '2026-10-08', setup_number: 4,
+      standard_symbol: 'XAUUSD', broker_symbol: 'XAUUSDm', side: 'SELL',
+      zone_low: 4140, zone_high: 4143, stop_loss: 4148, take_profit: 4135,
+      lot_size: 0.01, starting_balance: 300, raw_setup: 'TRADE SETUP #4', raw_outcome: '',
+      result_json: '{"trades":[]}', created_at: '2026-10-09T00:00:00.000Z', updated_at: '2026-10-09T00:00:00.000Z',
+    });
     db.prepare("UPDATE accounts SET master_password_encrypted='secret'").run();
     const backup = packageData(db);
     assert.equal(backup.accounts[0].master_password_encrypted, undefined);
     restorePackage(db, backup);
+    assert.equal(db.prepare('SELECT count(*) AS total FROM signal_analyses').get().total, 1);
     assert.equal(
       db.prepare('SELECT master_password_encrypted FROM accounts').get().master_password_encrypted,
       '',
@@ -185,6 +194,22 @@ test('each trade return uses the capital available immediately before that close
   assert.equal(result[0].trade_return_pct, 5);
   assert.equal(result[1].capital_at_trade, 105);
   assert.ok(Math.abs(result[1].trade_return_pct + 9.523809523809524) < 1e-9);
+});
+test('signal parser removes emojis and extracts setup, TP1, and every reported entry', () => {
+  const parsed = parseSignalText(
+    'TRADE SETUP #5 – October 8, 2026\n👨🏼‍💻BUY XAUUSD ZONE : 4117 - 4120\n🔺 SL: 4112\n🔹 TP: 4125 - 4130 - 4040',
+    '🎯 TP1 HIT ✔️\n+50 PIPS from entry 4117\n+80 PIPS from entry 4114',
+  );
+  assert.equal(parsed.setup_number, 5);
+  assert.equal(parsed.side, 'BUY');
+  assert.equal(parsed.standard_symbol, 'XAUUSD');
+  assert.deepEqual([parsed.zone_low, parsed.zone_high, parsed.stop_loss, parsed.take_profit], [4117, 4120, 4112, 4125]);
+  assert.deepEqual(parsed.reported_entries, [{ reported_pips: 50, entry: 4117 }, { reported_pips: 80, entry: 4114 }]);
+  assert.equal(parsed.tp1_confirmed, true);
+  assert.doesNotMatch(stripSignalDecorations('🎯 hello ✔️'), /🎯|✔/u);
+  assert.deepEqual(summarizeSignalAnalysis({ trades: [{ net_pnl: 8 }, { net_pnl: 11 }] }, 300), {
+    total_pnl: 19, projected_balance: 319, wins: 2, losses: 0,
+  });
 });
 function execution(db, send) {
   const bridge = {

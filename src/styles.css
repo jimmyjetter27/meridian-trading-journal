@@ -591,6 +591,21 @@ tbody tr:hover {
 .calculator-reference small { color: #8190a2; }
 .calculator-reference b .ghs-equivalent { font-size: 9px; }
 .trade-result-review { margin-bottom: 20px; }
+.signal-page { display: grid; gap: 18px; }
+.signal-form-panel { margin-top: 0; display: grid; gap: 22px; }
+.signal-form { display: grid; gap: 16px; }
+.signal-fields { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.signal-form textarea { width: 100%; resize: vertical; font-family: inherit; line-height: 1.55; }
+.signal-result { margin-top: 0; }
+.signal-result .table-heading { align-items: flex-start; }
+.signal-result .danger { color: #ef8c9c; border-color: #5d3039; }
+.signal-totals { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 20px 0; }
+.signal-totals > div { display: grid; gap: 6px; padding: 16px; border: 1px solid #283645; border-radius: 9px; background: #101821; }
+.signal-totals small { color: #8291a4; }
+.signal-totals strong { font-size: 22px; }
+.signal-method { display: flex; flex-wrap: wrap; gap: 10px 20px; margin-top: 16px; color: #8291a4; font-size: 10px; }
+.signal-history { display: grid; gap: 16px; }
+.signal-history > .table-heading { padding: 8px 2px 0; }
 .returns-chart-panel { padding: 22px 24px 16px; }
 .returns-bars { display: flex; align-items: flex-end; gap: 7px; min-height: 265px; margin-top: 20px; overflow-x: auto; padding: 10px 2px 4px; }
 .return-bar-column { display: grid; grid-template-rows: 18px 190px 32px; gap: 5px; align-items: end; min-width: 42px; flex: 1; color: #8494a8; text-align: center; font-size: 8px; }
@@ -844,6 +859,10 @@ tbody tr:hover {
     grid-template-columns: 1fr;
   }
   .calculator-reference {
+    grid-template-columns: 1fr 1fr;
+  }
+  .signal-fields,
+  .signal-totals {
     grid-template-columns: 1fr 1fr;
   }
   .topbar {

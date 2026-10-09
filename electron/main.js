@@ -22,6 +22,7 @@ import { diagnose } from './diagnostics.js';
 import { Mt5AdapterManager } from './mt5Adapter.js';
 import { syncMt5History } from './mt5Sync.js';
 import { calculatePeriodReturns } from './returns.js';
+import { parseSignalText, summarizeSignalAnalysis } from './signals.js';
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 let db, win, engine, alerts;
 let restoring = false;
@@ -124,6 +125,10 @@ else
           `SELECT d.*,a.display_name,a.broker_name FROM daily_entries d JOIN accounts a ON a.id=d.account_id
            WHERE (@account IS NULL OR d.account_id=@account) ORDER BY d.entry_date DESC LIMIT 180`,
         ).all({ account: f.account || null }),
+        signalAnalyses: db.prepare(
+          `SELECT s.*,a.display_name,a.broker_name,a.base_currency FROM signal_analyses s
+           JOIN accounts a ON a.id=s.account_id ORDER BY s.signal_date DESC,s.setup_number DESC`,
+        ).all().map((row) => ({ ...row, result: JSON.parse(row.result_json) })),
         priceAlerts: alerts.list(),
         alertMode: db.prepare("SELECT value FROM app_settings WHERE key='alert_mode'").get()?.value || 'tone',
       };
@@ -346,6 +351,59 @@ else
       const balances = db.prepare('SELECT account_id,balance,captured_at FROM account_balances').all()
         .filter((balance) => ids.has(balance.account_id));
       return calculatePeriodReturns(accounts, trades, capitalEvents, balances, request.granularity);
+    });
+    handle('signals:analyze', async (input) => {
+      const request = z.object({
+        account_id: z.number().int().positive(),
+        signal_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        setup_text: z.string().min(1).max(30000),
+        outcome_text: z.string().max(30000).default(''),
+        starting_balance: z.number().nonnegative().finite(),
+      }).parse(input);
+      const parsed = parseSignalText(request.setup_text, request.outcome_text);
+      const account = await liveAccount(request.account_id);
+      const mapping = db.prepare(
+        'SELECT broker_symbol FROM symbol_mappings WHERE broker_name=? AND standard_symbol=?',
+      ).get(account.broker_name, parsed.standard_symbol);
+      if (!mapping) throw Error(`No ${parsed.standard_symbol} symbol mapping is configured for ${account.broker_name}`);
+      const result = await bridge.request('signal.backtest', {
+        symbol: mapping.broker_symbol,
+        date_from: `${request.signal_date}T00:00:00.000Z`,
+        date_to: `${request.signal_date}T23:59:59.999Z`,
+        side: parsed.side,
+        zone_low: parsed.zone_low,
+        zone_high: parsed.zone_high,
+        stop_loss: parsed.stop_loss,
+        take_profit: parsed.take_profit,
+        lot_size: 0.01,
+        tp1_confirmed: parsed.tp1_confirmed,
+        stop_confirmed: parsed.stop_confirmed,
+        reported_entries: parsed.reported_entries,
+      }, undefined, 60000);
+      if (String(result.login_id) !== String(account.login_id) || result.server_name !== account.server_name)
+        throw Error('MT5 returned data for a different account');
+      const summary = summarizeSignalAnalysis(result, request.starting_balance);
+      const analysis = { ...result, ...summary, parsed: { ...parsed, clean_setup_text: undefined, clean_outcome_text: undefined } };
+      const now = new Date().toISOString();
+      db.prepare(
+        `INSERT INTO signal_analyses(account_id,signal_date,setup_number,standard_symbol,broker_symbol,side,zone_low,zone_high,stop_loss,take_profit,lot_size,starting_balance,raw_setup,raw_outcome,result_json,created_at,updated_at)
+         VALUES(@account_id,@signal_date,@setup_number,@standard_symbol,@broker_symbol,@side,@zone_low,@zone_high,@stop_loss,@take_profit,0.01,@starting_balance,@raw_setup,@raw_outcome,@result_json,@now,@now)
+         ON CONFLICT(account_id,signal_date,setup_number) DO UPDATE SET standard_symbol=excluded.standard_symbol,broker_symbol=excluded.broker_symbol,
+         side=excluded.side,zone_low=excluded.zone_low,zone_high=excluded.zone_high,stop_loss=excluded.stop_loss,take_profit=excluded.take_profit,
+         starting_balance=excluded.starting_balance,raw_setup=excluded.raw_setup,raw_outcome=excluded.raw_outcome,result_json=excluded.result_json,updated_at=excluded.updated_at`,
+      ).run({
+        account_id: account.id, signal_date: request.signal_date, setup_number: parsed.setup_number,
+        standard_symbol: parsed.standard_symbol, broker_symbol: mapping.broker_symbol, side: parsed.side,
+        zone_low: parsed.zone_low, zone_high: parsed.zone_high, stop_loss: parsed.stop_loss,
+        take_profit: parsed.take_profit, starting_balance: request.starting_balance,
+        raw_setup: parsed.clean_setup_text, raw_outcome: parsed.clean_outcome_text,
+        result_json: JSON.stringify(analysis), now,
+      });
+      return analysis;
+    });
+    handle('signals:delete', (input) => {
+      const id = z.number().int().positive().parse(input);
+      return db.prepare('DELETE FROM signal_analyses WHERE id=?').run(id).changes;
     });
     handle('mappings:save', (input) => {
       if (engine.busy) throw Error('Wait for execution to finish');

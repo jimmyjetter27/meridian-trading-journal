@@ -230,6 +230,44 @@ function CalculatorsPage({ accounts, activeAccountId, fx }) {
   return <div className="calculators-layout"><section className="panel calculator-card"><div><div className="eyebrow">CAPITAL CALCULATOR</div><h2>Dollar amount as a percentage</h2><p className="muted mt-2">Find out how much a dollar amount represents relative to the selected account’s current capital.</p></div><div className="calculator-fields"><Field label="Account"><select value={accountId} onChange={(event) => setAccountId(event.target.value)}>{accounts.map((item) => <option key={item.id} value={item.id}>{item.display_name}</option>)}</select></Field><Field label="Dollar amount"><input type="number" min="0" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} /></Field></div><div className="calculator-result"><small>{money(value, account?.base_currency)} is</small><strong>{percentage == null ? '—' : `${percentage.toFixed(2)}%`}</strong><span>of <MoneyValue value={capital} currency={account?.base_currency} fx={fx} /> current capital</span></div><div className="calculator-reference">{[1, 2, 5, 10].map((rate) => <div key={rate}><small>{rate}% of capital</small><b><MoneyValue value={capital * rate / 100} currency={account?.base_currency} fx={fx} /></b></div>)}</div></section><section className="panel future-calculators"><h2>More calculators</h2><p className="muted mt-2">Additional trading and risk calculations can be added here later.</p></section></div>;
 }
 
+function SignalAnalysisPage({ accounts, activeAccountId, analyses, fx, onRefresh, onError, onToast }) {
+  const [accountId, setAccountId] = useState(activeAccountId || accounts[0]?.id || '');
+  const [date, setDate] = useState(localDateKey());
+  const [startingBalance, setStartingBalance] = useState('');
+  const [latest, setLatest] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const account = accounts.find((candidate) => candidate.id === Number(accountId));
+  useEffect(() => { if (activeAccountId) setAccountId(activeAccountId); }, [activeAccountId]);
+  useEffect(() => { setStartingBalance(String(account?.current_balance ?? 0)); setLatest(null); }, [account?.id]);
+  const saved = analyses.filter((item) => item.account_id === Number(accountId));
+  const savedHistory = latest
+    ? saved.filter((item) => item.signal_date !== latest.signal_date || item.setup_number !== latest.setup_number)
+    : saved;
+  const renderAnalysis = (item, key) => {
+    const result = item.result || item;
+    const currency = item.base_currency || account?.base_currency || result.currency || 'USD';
+    return <section className="panel signal-result" key={key}>
+      <div className="table-heading"><div><div className="eyebrow">{item.signal_date || date} · SETUP #{item.setup_number || result.parsed?.setup_number}</div><h2>{item.side || result.parsed?.side} {item.standard_symbol || result.parsed?.standard_symbol}</h2><p className="muted text-xs mt-2">Zone {number(item.zone_low ?? result.parsed?.zone_low, 6)}–{number(item.zone_high ?? result.parsed?.zone_high, 6)} · SL {number(item.stop_loss ?? result.parsed?.stop_loss, 6)} · TP1 {number(item.take_profit ?? result.parsed?.take_profit, 6)} · 0.01 lot per entry</p></div>{item.id && <button className="danger" onClick={async () => { try { await call('signals:delete', item.id); await onRefresh(); onToast('Saved signal analysis deleted.'); } catch (error) { onError(error); } }}>Delete</button>}</div>
+      <div className="signal-totals"><div><small>Total estimated P&amp;L</small><strong className={result.total_pnl < 0 ? 'negative' : 'positive'}><MoneyValue value={result.total_pnl} currency={currency} fx={fx} /></strong></div><div><small>Starting balance</small><strong><MoneyValue value={item.starting_balance ?? Number(startingBalance)} currency={currency} fx={fx} /></strong></div><div><small>Approximate balance</small><strong className={result.projected_balance < (item.starting_balance ?? Number(startingBalance)) ? 'negative' : 'positive'}><MoneyValue value={result.projected_balance} currency={currency} fx={fx} /></strong></div></div>
+      {result.trades?.length ? <div className="table-scroll"><table><thead><tr><th>Trade</th><th>Entry</th><th>Exit</th><th>Outcome</th><th>Gross</th><th>Est. fees</th><th>Net P&amp;L</th></tr></thead><tbody>{result.trades.map((trade, index) => <tr key={`${trade.entry}-${index}`}><td>Entry {index + 1}<small>{trade.source?.startsWith('confirmed') ? 'Copied update + broker spread' : 'Broker tick replay'}</small></td><td>{number(trade.entry, 6)}{trade.signal_entry != null && <small>Signal {number(trade.signal_entry, 6)}</small>}{trade.reported_pips != null && <small>{number(trade.reported_pips, 1)} reported pips</small>}</td><td>{number(trade.exit, 6)}</td><td><span className={`result ${trade.net_pnl < 0 ? 'loss' : trade.status === 'OPEN_AT_DAY_END' ? 'be' : 'win'}`}>{trade.status}</span></td><td className={trade.gross_pnl < 0 ? 'negative' : 'positive'}>{money(trade.gross_pnl, currency)}</td><td>{money(trade.estimated_fees, currency)}</td><td className={trade.net_pnl < 0 ? 'negative' : 'positive'}><MoneyValue value={trade.net_pnl} currency={currency} fx={fx} /></td></tr>)}</tbody></table></div> : <div className="empty-table">The entry zone was not reached in the broker’s available tick history for this date.</div>}
+      <div className="signal-method"><span>{number(result.tick_count, 0)} broker ticks checked</span><span>Median spread: {number(result.spread_points, 1)} points</span><span>{result.fee_sample_size ? `Fees estimated from ${result.fee_sample_size} completed ${result.symbol} trades` : 'No comparable fee history; commission estimate is $0.00'}</span></div>
+    </section>;
+  };
+  return <div className="signal-page">
+    <section className="panel signal-form-panel"><div><div className="eyebrow">TP1 SIGNAL REPLAY</div><h2>Analyze a trade signal</h2><p className="muted mt-2">Paste one setup and its optional TP1 update. Meridian removes emojis, saves it by date and setup number, and uses the selected broker’s historical ticks. Every copied entry is calculated at 0.01 lot.</p></div>
+      <form onSubmit={async (event) => { event.preventDefault(); const values = Object.fromEntries(new FormData(event.currentTarget)); try { setLoading(true); const result = await call('signals:analyze', { account_id: Number(accountId), signal_date: date, setup_text: values.setup, outcome_text: values.outcome, starting_balance: Number(startingBalance) }); setLatest({ ...result, signal_date: date, setup_number: result.parsed.setup_number, starting_balance: Number(startingBalance), side: result.parsed.side, standard_symbol: result.parsed.standard_symbol, zone_low: result.parsed.zone_low, zone_high: result.parsed.zone_high, stop_loss: result.parsed.stop_loss, take_profit: result.parsed.take_profit, base_currency: account?.base_currency }); await onRefresh(); onToast(`Setup #${result.parsed.setup_number} analyzed and saved.`); } catch (error) { onError(error); } finally { setLoading(false); } }} className="signal-form">
+        <div className="signal-fields"><Field label="Broker account"><select value={accountId} onChange={(event) => setAccountId(event.target.value)}>{accounts.map((item) => <option key={item.id} value={item.id}>{item.display_name} · {item.broker_name}</option>)}</select></Field><Field label="Signal date"><input type="date" value={date} onChange={(event) => setDate(event.target.value)} required /></Field><Field label="Starting account balance"><input type="number" min="0" step="0.01" value={startingBalance} onChange={(event) => setStartingBalance(event.target.value)} required /></Field><Field label="Lot size"><input value="0.01" disabled /></Field></div>
+        <Field label="Trade setup text"><textarea name="setup" rows="8" required placeholder={'TRADE SETUP #4 – October 8, 2026\n\nSELL XAUUSD ZONE : 4140 - 4143\nSL: 4148\nTP: 4135 - 4130 - 4020'} /></Field>
+        <Field label="TP1 result text (optional)"><textarea name="outcome" rows="5" placeholder={'TP1 HIT\n+50 PIPS from entry 4117\n+80 PIPS from entry 4114'} /></Field>
+        <button className="primary" disabled={loading || !account}>{loading ? 'Checking broker history…' : 'Analyze and save signal'}</button>
+      </form>
+      <p className="notice">This is a historical estimate. With no TP1 update, Meridian treats the first broker tick inside the zone as the entry and the first later TP1 or SL touch as the exit. A copied TP1 update takes precedence and each “from entry” line becomes a separate 0.01-lot trade.</p>
+    </section>
+    {latest && renderAnalysis(latest, 'latest')}
+    <div className="signal-history"><div className="table-heading"><div><h2>Saved signal analyses</h2><p className="muted text-xs mt-2">Categorized by signal date and setup number.</p></div><span className="count">{saved.length}</span></div>{savedHistory.map((item) => renderAnalysis(item, item.id))}{!saved.length && <div className="empty-table">No signal analyses saved for this account yet.</div>}</div>
+  </div>;
+}
+
 function PriceChart({ candles, markers }) {
   const container = useRef(null);
   useEffect(() => {
@@ -431,6 +469,7 @@ function App() {
       priceAlerts: [],
       alertMode: 'tone',
       cashFlows: [],
+      signalAnalyses: [],
     }),
     [filters, setFilters] = useState({}),
     [accountScope, setAccountScope] = useState('active'),
@@ -554,13 +593,13 @@ function App() {
         </div>
         <div className="workspace-label">PERSONAL WORKSPACE</div>
         <nav>
-          {['Overview', 'Trade journal', 'Returns', 'Deposits & withdrawals', 'Daily journal', 'Active trades', 'Trade chart', 'Growth calculator', 'Calculators'].map((name, i) => (
+          {['Overview', 'Trade journal', 'Returns', 'Deposits & withdrawals', 'Daily journal', 'Active trades', 'Trade chart', 'Growth calculator', 'Calculators', 'Signal analysis'].map((name, i) => (
             <button
               key={name}
               className={tab === name ? 'nav active' : 'nav'}
               onClick={() => setTab(name)}
             >
-              <span>{['◫', '☷', '%', '↕', '✎', '●', '⌁', '∿', '÷'][i]}</span>
+              <span>{['◫', '☷', '%', '↕', '✎', '●', '⌁', '∿', '÷', '⌕'][i]}</span>
               {name}
             </button>
           ))}
@@ -643,10 +682,10 @@ function App() {
             <div>
               <div className="eyebrow">YOUR PROCESS. YOUR PROGRESS.</div>
               <h1>
-                {{ Overview: 'Performance overview', 'Trade journal': 'Trade journal', Returns: 'Returns on capital', 'Deposits & withdrawals': 'Deposits & withdrawals', 'Daily journal': 'Daily journal', 'Active trades': 'Active trades', 'Trade chart': 'Trade chart', 'Growth calculator': 'Account growth & loss calculator', Calculators: 'Trading calculators' }[tab]}
+                {{ Overview: 'Performance overview', 'Trade journal': 'Trade journal', Returns: 'Returns on capital', 'Deposits & withdrawals': 'Deposits & withdrawals', 'Daily journal': 'Daily journal', 'Active trades': 'Active trades', 'Trade chart': 'Trade chart', 'Growth calculator': 'Account growth & loss calculator', Calculators: 'Trading calculators', 'Signal analysis': 'Signal profit & loss analysis' }[tab]}
               </h1>
               <p className="muted mt-2">
-                {tab === 'Returns' ? 'Measure each period’s realized result against its available capital.' : tab === 'Deposits & withdrawals' ? 'See every cash movement separately from trading performance.' : tab === 'Daily journal' ? 'Review the behavior and context behind each trading day.' : tab === 'Active trades' ? 'Your open MT5 positions, floating P&L, and risk at stop.' : tab === 'Trade chart' ? 'See each entry and exit in its market context.' : tab === 'Growth calculator' ? 'Explore compounded growth and loss scenarios for each account.' : tab === 'Calculators' ? 'Quick calculations based on your live account capital.' : 'A clearer view of every trade, across every account.'}
+                {tab === 'Returns' ? 'Measure each period’s realized result against its available capital.' : tab === 'Deposits & withdrawals' ? 'See every cash movement separately from trading performance.' : tab === 'Daily journal' ? 'Review the behavior and context behind each trading day.' : tab === 'Active trades' ? 'Your open MT5 positions, floating P&L, and risk at stop.' : tab === 'Trade chart' ? 'See each entry and exit in its market context.' : tab === 'Growth calculator' ? 'Explore compounded growth and loss scenarios for each account.' : tab === 'Calculators' ? 'Quick calculations based on your live account capital.' : tab === 'Signal analysis' ? 'Replay copied signals against your broker’s historical market data.' : 'A clearer view of every trade, across every account.'}
               </p>
             </div>
             {journalTab && <div className="flex gap-3">
@@ -935,6 +974,8 @@ function App() {
             <ProjectionPage accounts={data.accounts} activeAccountId={data.activeAccount} fx={fx} />
           ) : tab === 'Calculators' ? (
             <CalculatorsPage accounts={data.accounts} activeAccountId={data.activeAccount} fx={fx} />
+          ) : tab === 'Signal analysis' ? (
+            <SignalAnalysisPage accounts={data.accounts} activeAccountId={data.activeAccount} analyses={data.signalAnalyses || []} fx={fx} onRefresh={refresh} onError={fail} onToast={setToast} />
           ) : null}
           <footer className="page-footer">
             <span>MERIDIAN JOURNAL</span>

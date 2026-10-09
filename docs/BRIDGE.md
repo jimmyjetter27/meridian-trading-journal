@@ -16,6 +16,7 @@ The Electron main process verifies `login_id` and `server_name` on every account
 - `positions.active`: returns open-position details for monitoring only.
 - `symbol.snapshot`: accepts an exact broker symbol and returns its current quote and symbol metadata for alerts.
 - `chart.snapshot`: returns OHLC candles for an exact symbol and supported timeframe.
+- `signal.backtest`: replays a signal against historical broker ticks and returns read-only TP1/SL estimates using MT5 profit calculations, historical spread, and fees inferred from comparable completed trades.
 - `fx.rate`: returns a broker-provided conversion quote when the requested currency pair exists.
 
 The methods `trade.place`, `trade.close`, `trade.status`, and `position.snapshot` always return a permission error. They are not exposed to the renderer.
