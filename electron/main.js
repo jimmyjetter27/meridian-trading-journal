@@ -398,8 +398,6 @@ else
         throw Error('MT5 returned data for a different account');
       if (!result.trades.length)
         throw Error(`The ${parsed.standard_symbol} entry zone was not reached in the broker’s tick history for ${request.signal_date}.`);
-      if (result.market_status !== request.outcome)
-        throw Error(`The selected ${request.outcome} result conflicts with the broker tick replay, which reached ${result.market_status.replaceAll('_', ' ')} first.`);
       const summary = summarizeSignalAnalysis(result, request.starting_balance);
       const analysis = { ...result, ...summary, parsed: { ...parsed, clean_setup_text: undefined, clean_outcome_text: undefined } };
       const now = new Date().toISOString();

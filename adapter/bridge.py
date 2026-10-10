@@ -483,19 +483,37 @@ class Adapter:
             exit_tick = None
             exit_price = None
             status = "OPEN_AT_DAY_END"
-            for tick in usable[entry_index:]:
-                candidate = float(tick["bid"] if side == "BUY" else tick["ask"])
-                stopped = candidate <= stop_loss if side == "BUY" else candidate >= stop_loss
-                targeted = candidate >= take_profit if side == "BUY" else candidate <= take_profit
-                if stopped or targeted:
-                    exit_tick = tick
-                    exit_price = stop_loss if stopped else take_profit
-                    status = "SL" if stopped else "TP1"
-                    break
-            if exit_tick is None:
-                exit_tick = usable[-1]
-                exit_price = float(exit_tick["bid"] if side == "BUY" else exit_tick["ask"])
-            trades.append(calculate(entry_price, exit_price, status, stamp(entry_tick), stamp(exit_tick)))
+            selected_status = "TP1" if params.get("tp1_confirmed") else "SL" if params.get("stop_confirmed") else None
+            if selected_status:
+                signal_exit = take_profit if selected_status == "TP1" else stop_loss
+                exit_price = signal_exit if side == "BUY" else signal_exit + median_spread
+                status = selected_status
+                for tick in usable[entry_index:]:
+                    candidate = float(tick["bid"] if side == "BUY" else tick["ask"])
+                    reached = (
+                        candidate >= take_profit if side == "BUY" and status == "TP1"
+                        else candidate <= take_profit if side == "SELL" and status == "TP1"
+                        else candidate <= stop_loss if side == "BUY"
+                        else candidate >= stop_loss
+                    )
+                    if reached:
+                        exit_tick = tick
+                        break
+                trades.append(calculate(entry_price, exit_price, status, stamp(entry_tick), stamp(exit_tick) if exit_tick is not None else None, source="selected outcome + broker tick entry"))
+            else:
+                for tick in usable[entry_index:]:
+                    candidate = float(tick["bid"] if side == "BUY" else tick["ask"])
+                    stopped = candidate <= stop_loss if side == "BUY" else candidate >= stop_loss
+                    targeted = candidate >= take_profit if side == "BUY" else candidate <= take_profit
+                    if stopped or targeted:
+                        exit_tick = tick
+                        exit_price = stop_loss if stopped else take_profit
+                        status = "SL" if stopped else "TP1"
+                        break
+                if exit_tick is None:
+                    exit_tick = usable[-1]
+                    exit_price = float(exit_tick["bid"] if side == "BUY" else exit_tick["ask"])
+                trades.append(calculate(entry_price, exit_price, status, stamp(entry_tick), stamp(exit_tick)))
         return {
             "login_id": str(account.login), "server_name": account.server,
             "currency": account.currency, "symbol": symbol, "trades": trades,
