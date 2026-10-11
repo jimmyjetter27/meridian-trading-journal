@@ -14,7 +14,7 @@ import { ExecutionEngine } from '../electron/execution.js';
 import { diagnose } from '../electron/diagnostics.js';
 import { syncMt5History } from '../electron/mt5Sync.js';
 import { calculatePeriodReturns } from '../electron/returns.js';
-import { parseSignalText, stripSignalDecorations, summarizeSignalAnalysis, validateSignalDate } from '../electron/signals.js';
+import { applySignalJourney, parseSignalText, stripSignalDecorations, summarizeSignalAnalysis, validateSignalDate } from '../electron/signals.js';
 function fixture() {
   const db = openDatabase(':memory:');
   insertObject(db, 'accounts', {
@@ -68,7 +68,7 @@ test('account schema migration provides an account-specific MT5 terminal path', 
     const account = publicAccounts(db)[0];
     assert.equal(account.terminal_path, 'C:\\Program Files\\MetaTrader 5\\terminal64.exe');
     assert.equal(account.tracking_since, '2000-01-01T00:00:00.000Z');
-    assert.equal(db.pragma('user_version', { simple: true }), 8);
+    assert.equal(db.pragma('user_version', { simple: true }), 9);
   } finally {
     db.close();
   }
@@ -209,9 +209,19 @@ test('signal parser removes emojis and extracts setup, TP1, and every reported e
   assert.deepEqual(parsed.reported_entries, [{ reported_pips: 50, entry: 4117 }, { reported_pips: 80, entry: 4114 }]);
   assert.equal(parsed.tp1_confirmed, true);
   assert.doesNotMatch(stripSignalDecorations('🎯 hello ✔️'), /🎯|✔/u);
-  assert.deepEqual(summarizeSignalAnalysis({ trades: [{ net_pnl: 8 }, { net_pnl: 11 }] }, 300), {
-    total_pnl: 19, projected_balance: 319, wins: 2, losses: 0,
-  });
+  const summary = summarizeSignalAnalysis({ trades: [{ net_pnl: 8 }, { net_pnl: 11 }] }, 300);
+  assert.equal(summary.total_pnl, 19);
+  assert.equal(summary.projected_balance, 319);
+  assert.ok(Math.abs(summary.pnl_pct - 6.333333333333333) < 1e-9);
+  assert.ok(Math.abs(summary.trades[0].net_pnl_pct - 2.666666666666667) < 1e-9);
+  const journey = applySignalJourney([
+    { id: 2, signal_date: '2026-10-02', setup_number: 1, result: { trades: [{ net_pnl: -10 }] } },
+    { id: 1, signal_date: '2026-10-01', setup_number: 1, result: { trades: [{ net_pnl: 20 }] } },
+  ], '2026-10-01', 300);
+  assert.equal(journey[0].starting_balance, 300);
+  assert.equal(journey[0].result.projected_balance, 320);
+  assert.equal(journey[1].starting_balance, 320);
+  assert.equal(journey[1].result.projected_balance, 310);
   assert.equal(validateSignalDate(parsed, '2026-10-08'), parsed);
   assert.throws(() => validateSignalDate(parsed, '2026-10-09'), /pasted setup date/);
   assert.throws(() => parseSignalText('TRADE SETUP #2 – October 8, 2026\nBUY XAUUSD ZONE: 4173 - 4176\nSL: 4180\nTP: 4188'), /SL must be below/);

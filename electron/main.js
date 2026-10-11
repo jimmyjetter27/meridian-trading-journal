@@ -22,7 +22,7 @@ import { diagnose } from './diagnostics.js';
 import { Mt5AdapterManager } from './mt5Adapter.js';
 import { syncMt5History } from './mt5Sync.js';
 import { calculatePeriodReturns } from './returns.js';
-import { parseSignalText, summarizeSignalAnalysis, validateSignalDate } from './signals.js';
+import { applySignalJourney, parseSignalText, summarizeSignalAnalysis, validateSignalDate } from './signals.js';
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 let db, win, engine, alerts;
 let restoring = false;
@@ -33,10 +33,31 @@ let lastAutoSyncAt = 0;
 const bridge = new Bridge();
 let status = 'Disconnected';
 let adapter;
+function recalculateSignalJourney(accountId) {
+  const journey = db.prepare('SELECT * FROM signal_journeys WHERE account_id=?').get(accountId);
+  if (!journey) return null;
+  const rows = db.prepare(
+    'SELECT * FROM signal_analyses WHERE account_id=? ORDER BY signal_date,setup_number,id',
+  ).all(accountId);
+  const calculated = applySignalJourney(rows, journey.start_date, journey.starting_capital);
+  const update = db.prepare(
+    'UPDATE signal_analyses SET starting_balance=?,result_json=?,updated_at=? WHERE id=?',
+  );
+  const now = new Date().toISOString();
+  db.transaction(() => {
+    for (const row of calculated) {
+      if (row.signal_date >= journey.start_date)
+        update.run(row.starting_balance, row.result_json, now, row.id);
+    }
+  })();
+  return journey;
+}
 if (!app.requestSingleInstanceLock()) app.quit();
 else
   app.whenReady().then(() => {
     db = openDatabase(join(app.getPath('userData'), 'journal.db'));
+    for (const journey of db.prepare('SELECT account_id FROM signal_journeys').all())
+      recalculateSignalJourney(journey.account_id);
     engine = new ExecutionEngine(db, bridge);
     adapter = new Mt5AdapterManager(bridge, root);
     const existingAccounts = publicAccounts(db);
@@ -129,6 +150,7 @@ else
           `SELECT s.*,a.display_name,a.broker_name,a.base_currency FROM signal_analyses s
            JOIN accounts a ON a.id=s.account_id ORDER BY s.signal_date DESC,s.setup_number DESC`,
         ).all().map((row) => ({ ...row, result: JSON.parse(row.result_json) })),
+        signalJourneys: db.prepare('SELECT * FROM signal_journeys ORDER BY account_id').all(),
         priceAlerts: alerts.list(),
         alertMode: db.prepare("SELECT value FROM app_settings WHERE key='alert_mode'").get()?.value || 'tone',
       };
@@ -358,9 +380,12 @@ else
         signal_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
         setup_text: z.string().min(1).max(30000),
         outcome: z.enum(['TP1', 'SL']),
-        starting_balance: z.number().nonnegative().finite(),
+        starting_balance: z.number().nonnegative().finite().optional(),
+        entry_price: z.number().positive().finite().optional(),
       }).parse(input);
       const parsed = validateSignalDate(parseSignalText(request.setup_text), request.signal_date);
+      if (request.entry_price != null && (request.entry_price < parsed.zone_low || request.entry_price > parsed.zone_high))
+        throw Error(`The entry price must be between ${parsed.zone_low} and ${parsed.zone_high}.`);
       parsed.tp1_confirmed = request.outcome === 'TP1';
       parsed.stop_confirmed = request.outcome === 'SL';
       const duplicateNumber = db.prepare(
@@ -393,27 +418,93 @@ else
         tp1_confirmed: parsed.tp1_confirmed,
         stop_confirmed: parsed.stop_confirmed,
         reported_entries: parsed.reported_entries,
+        entry_price: request.entry_price,
       }, undefined, 60000);
       if (String(result.login_id) !== String(account.login_id) || result.server_name !== account.server_name)
         throw Error('MT5 returned data for a different account');
       if (!result.trades.length)
         throw Error(`The ${parsed.standard_symbol} entry zone was not reached in the broker’s tick history for ${request.signal_date}.`);
-      const summary = summarizeSignalAnalysis(result, request.starting_balance);
+      let journey = db.prepare('SELECT * FROM signal_journeys WHERE account_id=?').get(account.id);
+      if (!journey) {
+        const startingCapital = request.starting_balance ?? 300;
+        const now = new Date().toISOString();
+        db.prepare(
+          'INSERT INTO signal_journeys(account_id,start_date,starting_capital,updated_at) VALUES(?,?,?,?)',
+        ).run(account.id, request.signal_date, startingCapital, now);
+        journey = { account_id: account.id, start_date: request.signal_date, starting_capital: startingCapital };
+      }
+      const summary = summarizeSignalAnalysis(result, journey.starting_capital);
       const analysis = { ...result, ...summary, parsed: { ...parsed, clean_setup_text: undefined, clean_outcome_text: undefined } };
       const now = new Date().toISOString();
       const inserted = db.prepare(
-        `INSERT INTO signal_analyses(account_id,signal_date,setup_number,standard_symbol,broker_symbol,side,zone_low,zone_high,stop_loss,take_profit,lot_size,starting_balance,raw_setup,raw_outcome,result_json,created_at,updated_at)
-         VALUES(@account_id,@signal_date,@setup_number,@standard_symbol,@broker_symbol,@side,@zone_low,@zone_high,@stop_loss,@take_profit,0.01,@starting_balance,@raw_setup,@raw_outcome,@result_json,@now,@now)
+        `INSERT INTO signal_analyses(account_id,signal_date,setup_number,standard_symbol,broker_symbol,side,zone_low,zone_high,stop_loss,take_profit,lot_size,starting_balance,entry_price,raw_setup,raw_outcome,result_json,created_at,updated_at)
+         VALUES(@account_id,@signal_date,@setup_number,@standard_symbol,@broker_symbol,@side,@zone_low,@zone_high,@stop_loss,@take_profit,0.01,@starting_balance,@entry_price,@raw_setup,@raw_outcome,@result_json,@now,@now)
         `,
       ).run({
         account_id: account.id, signal_date: request.signal_date, setup_number: parsed.setup_number,
         standard_symbol: parsed.standard_symbol, broker_symbol: mapping.broker_symbol, side: parsed.side,
         zone_low: parsed.zone_low, zone_high: parsed.zone_high, stop_loss: parsed.stop_loss,
-        take_profit: parsed.take_profit, starting_balance: request.starting_balance,
+        take_profit: parsed.take_profit, starting_balance: journey.starting_capital,
+        entry_price: request.entry_price ?? null,
         raw_setup: parsed.clean_setup_text, raw_outcome: request.outcome,
         result_json: JSON.stringify(analysis), now,
       });
-      return { ...analysis, id: Number(inserted.lastInsertRowid) };
+      recalculateSignalJourney(account.id);
+      const saved = db.prepare('SELECT * FROM signal_analyses WHERE id=?').get(Number(inserted.lastInsertRowid));
+      return { ...JSON.parse(saved.result_json), id: saved.id, starting_balance: saved.starting_balance, entry_price: saved.entry_price };
+    });
+    handle('signals:journey', (input) => {
+      const request = z.object({
+        account_id: z.number().int().positive(),
+        start_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        starting_capital: z.number().nonnegative().finite(),
+      }).parse(input);
+      const now = new Date().toISOString();
+      db.prepare(
+        `INSERT INTO signal_journeys(account_id,start_date,starting_capital,updated_at)
+         VALUES(@account_id,@start_date,@starting_capital,@now)
+         ON CONFLICT(account_id) DO UPDATE SET start_date=excluded.start_date,starting_capital=excluded.starting_capital,updated_at=excluded.updated_at`,
+      ).run({ ...request, now });
+      recalculateSignalJourney(request.account_id);
+      return db.prepare('SELECT * FROM signal_journeys WHERE account_id=?').get(request.account_id);
+    });
+    handle('signals:update', async (input) => {
+      const request = z.object({
+        id: z.number().int().positive(), outcome: z.enum(['TP1', 'SL']),
+        entry_price: z.number().positive().finite().nullable(),
+      }).parse(input);
+      const row = db.prepare('SELECT * FROM signal_analyses WHERE id=?').get(request.id);
+      if (!row) throw Error('Signal analysis not found');
+      if (request.entry_price != null && (request.entry_price < row.zone_low || request.entry_price > row.zone_high))
+        throw Error(`The entry price must be between ${row.zone_low} and ${row.zone_high}.`);
+      const account = await liveAccount(row.account_id);
+      const parsed = parseSignalText(row.raw_setup);
+      parsed.tp1_confirmed = request.outcome === 'TP1';
+      parsed.stop_confirmed = request.outcome === 'SL';
+      const result = await bridge.request('signal.backtest', {
+        symbol: row.broker_symbol,
+        date_from: `${row.signal_date}T00:00:00.000Z`,
+        date_to: `${row.signal_date}T23:59:59.999Z`,
+        side: row.side, zone_low: row.zone_low, zone_high: row.zone_high,
+        stop_loss: row.stop_loss, take_profit: row.take_profit, lot_size: 0.01,
+        tp1_confirmed: parsed.tp1_confirmed, stop_confirmed: parsed.stop_confirmed,
+        reported_entries: [], entry_price: request.entry_price ?? undefined,
+      }, undefined, 60000);
+      if (String(result.login_id) !== String(account.login_id) || result.server_name !== account.server_name)
+        throw Error('MT5 returned data for a different account');
+      if (!result.trades.length)
+        throw Error(`The ${row.standard_symbol} entry zone was not reached in the broker’s tick history for ${row.signal_date}.`);
+      const analysis = {
+        ...result,
+        ...summarizeSignalAnalysis(result, row.starting_balance),
+        parsed: { ...parsed, clean_setup_text: undefined, clean_outcome_text: undefined },
+      };
+      db.prepare(
+        'UPDATE signal_analyses SET entry_price=?,raw_outcome=?,result_json=?,updated_at=? WHERE id=?',
+      ).run(request.entry_price, request.outcome, JSON.stringify(analysis), new Date().toISOString(), row.id);
+      recalculateSignalJourney(row.account_id);
+      const saved = db.prepare('SELECT * FROM signal_analyses WHERE id=?').get(row.id);
+      return { ...saved, result: JSON.parse(saved.result_json) };
     });
     handle('signals:risk', async (input) => {
       const request = z.object({
@@ -444,8 +535,10 @@ else
     });
     handle('signals:delete', (input) => {
       const id = z.number().int().positive().parse(input);
+      const row = db.prepare('SELECT account_id FROM signal_analyses WHERE id=?').get(id);
       const result = db.prepare('DELETE FROM signal_analyses WHERE id=?').run(id);
       if (!result.changes) throw Error('Signal analysis not found');
+      recalculateSignalJourney(row.account_id);
       return result.changes;
     });
     handle('mappings:save', (input) => {

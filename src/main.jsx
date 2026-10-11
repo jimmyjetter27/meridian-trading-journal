@@ -249,72 +249,103 @@ function RiskAnalysisPage({ accounts, activeAccountId, fx, onError }) {
     </section>
     {result && <section className="panel risk-results"><div className={`risk-verdict ${result.within_limit ? 'safe' : 'blocked'}`}><div><div className="eyebrow">2% RISK RULE</div><h2>{result.within_limit ? 'Within your risk limit' : 'Do not take this trade'}</h2></div><strong>{number(Math.max(...result.entries.map((entry) => entry.loss_pct)), 2)}% worst-case risk</strong></div>
       <div className="table-heading"><div><h2>{result.parsed.side} {result.parsed.standard_symbol}</h2><p className="muted text-xs mt-2">Zone {number(result.parsed.zone_low, 6)}–{number(result.parsed.zone_high, 6)} · SL {number(result.parsed.stop_loss, 6)} · TP1 {number(result.parsed.take_profit, 6)}</p></div><span className="count">0.01 lot</span></div>
-      <div className="table-scroll"><table><thead><tr><th>Entry option</th><th>Broker-adjusted entry</th><th>Loss at SL</th><th>Risk %</th><th>Profit at TP1</th><th>Profit %</th><th>Risk : reward</th></tr></thead><tbody>{result.entries.map((entry) => <tr key={entry.label} className={entry.highest_risk ? 'highest-risk-row' : ''}><td><b>{entry.label}</b><small>{number(entry.signal_entry, 6)}{entry.highest_risk ? ' · highest SL distance' : ''}</small></td><td>{number(entry.execution_entry, 6)}</td><td className="negative"><MoneyValue value={entry.loss_pnl} currency={result.currency} fx={fx} /></td><td className={entry.loss_pct > 2 ? 'negative' : 'positive'}>{number(entry.loss_pct, 2)}%</td><td className={entry.profit_pnl < 0 ? 'negative' : 'positive'}><MoneyValue value={entry.profit_pnl} currency={result.currency} fx={fx} /></td><td className={entry.profit_pct < 0 ? 'negative' : 'positive'}>{number(entry.profit_pct, 2)}%</td><td>1 : {number(entry.risk_reward, 2)}</td></tr>)}</tbody></table></div>
+      <div className="table-scroll"><table><thead><tr><th>Entry option</th><th>Broker-adjusted entry</th><th>Net P&amp;L at SL</th><th>Net P&amp;L at TP1</th><th>Risk : reward</th></tr></thead><tbody>{result.entries.map((entry) => <tr key={entry.label} className={entry.highest_risk ? 'highest-risk-row' : ''}><td><b>{entry.label}</b><small>{number(entry.signal_entry, 6)}{entry.highest_risk ? ' · highest SL distance' : ''}</small></td><td>{number(entry.execution_entry, 6)}</td><td className="negative"><MoneyValue value={entry.loss_pnl} currency={result.currency} fx={fx} /><small>{number(entry.loss_pct, 2)}% of {money(result.capital, result.currency)} capital</small></td><td className={entry.profit_pnl < 0 ? 'negative' : 'positive'}><MoneyValue value={entry.profit_pnl} currency={result.currency} fx={fx} /><small>{number(entry.profit_pct, 2)}% of {money(result.capital, result.currency)} capital</small></td><td>1 : {number(entry.risk_reward, 2)}</td></tr>)}</tbody></table></div>
       <div className="signal-method"><span>Current spread: {number(result.spread_points, 1)} points</span><span>{result.fee_sample_size ? `Fees estimated from ${result.fee_sample_size} completed trades` : 'No comparable commission history'}</span><span>Results are calculations only and are not saved</span></div>
     </section>}
   </div>;
 }
 
-function SignalAnalysisPage({ accounts, activeAccountId, analyses, fx, onRefresh, onError, onToast }) {
+function SignalAnalysisPage({ accounts, activeAccountId, analyses, journeys, fx, onRefresh, onError, onToast }) {
   const [accountId, setAccountId] = useState(activeAccountId || accounts[0]?.id || '');
   const [date, setDate] = useState(localDateKey());
-  const [startingBalance, setStartingBalance] = useState('');
-  const [latest, setLatest] = useState(null);
+  const [journeyDate, setJourneyDate] = useState('2026-10-01');
+  const [journeyCapital, setJourneyCapital] = useState('300');
   const [historyDate, setHistoryDate] = useState('all');
   const [loading, setLoading] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [editEntry, setEditEntry] = useState('');
+  const [editOutcome, setEditOutcome] = useState('TP1');
   const account = accounts.find((candidate) => candidate.id === Number(accountId));
-  useEffect(() => { if (activeAccountId) setAccountId(activeAccountId); }, [activeAccountId]);
-  useEffect(() => { setStartingBalance(String(account?.current_balance ?? 0)); setLatest(null); setHistoryDate('all'); }, [account?.id]);
+  const journey = journeys.find((candidate) => candidate.account_id === Number(accountId));
   const saved = analyses.filter((item) => item.account_id === Number(accountId));
+  useEffect(() => { if (activeAccountId) setAccountId(activeAccountId); }, [activeAccountId]);
+  useEffect(() => {
+    const firstDate = [...saved].sort((a, b) => a.signal_date.localeCompare(b.signal_date))[0]?.signal_date;
+    setJourneyDate(journey?.start_date || firstDate || '2026-10-01');
+    setJourneyCapital(String(journey?.starting_capital ?? 300));
+    setHistoryDate('all');
+    setEditingId(null);
+  }, [account?.id, journey?.updated_at]);
   const availableDates = [...new Set(saved.map((item) => item.signal_date))].sort().reverse();
-  const savedHistory = latest
-    ? saved.filter((item) => item.signal_date !== latest.signal_date || item.setup_number !== latest.setup_number)
-    : saved;
-  const filteredHistory = savedHistory.filter((item) => historyDate === 'all' || item.signal_date === historyDate);
+  const filteredHistory = saved.filter((item) => historyDate === 'all' || item.signal_date === historyDate);
+  const orderedJourney = [...saved]
+    .filter((item) => item.signal_date >= journeyDate)
+    .sort((a, b) => a.signal_date.localeCompare(b.signal_date) || a.setup_number - b.setup_number || a.id - b.id);
+  const journeyBalance = orderedJourney.at(-1)?.result?.projected_balance ?? Number(journeyCapital || 0);
+  const journeyPnl = journeyBalance - Number(journeyCapital || 0);
   const dailySummaries = Object.values(saved.reduce((days, item) => {
-    const day = days[item.signal_date] ||= { date: item.signal_date, setups: 0, trades: 0, pnl: 0 };
+    const day = days[item.signal_date] ||= { date: item.signal_date, setups: 0, trades: 0, pnl: 0, opening: Number(item.starting_balance) };
     day.setups += 1;
     day.trades += item.result?.trades?.length || 0;
     day.pnl += Number(item.result?.total_pnl || 0);
+    day.opening = Math.min(day.opening, Number(item.starting_balance));
     return days;
   }, {})).sort((a, b) => b.date.localeCompare(a.date));
   const visibleDays = dailySummaries.filter((day) => historyDate === 'all' || day.date === historyDate);
   const filteredTotals = visibleDays.reduce((total, day) => ({ days: total.days + 1, setups: total.setups + day.setups, trades: total.trades + day.trades, pnl: total.pnl + day.pnl }), { days: 0, setups: 0, trades: 0, pnl: 0 });
   const deleteAnalysis = async (item) => {
-    if (!window.confirm(`Delete Setup #${item.setup_number || item.result?.parsed?.setup_number} for ${item.signal_date}?`)) return;
+    if (!window.confirm(`Delete Setup #${item.setup_number} for ${item.signal_date}?`)) return;
     try {
       await call('signals:delete', item.id);
-      if (latest?.id === item.id) setLatest(null);
       await onRefresh();
-      onToast('Signal analysis deleted.');
+      onToast('Signal analysis deleted and journey recalculated.');
     } catch (error) { onError(error); }
   };
-  const renderAnalysis = (item, key) => {
-    const result = item.result || item;
+  const saveJourney = async () => {
+    try {
+      await call('signals:journey', { account_id: Number(accountId), start_date: journeyDate, starting_capital: Number(journeyCapital) });
+      await onRefresh();
+      onToast('Signal journey recalculated.');
+    } catch (error) { onError(error); }
+  };
+  const updateAnalysis = async (item) => {
+    try {
+      setLoading(true);
+      await call('signals:update', { id: item.id, outcome: editOutcome, entry_price: editEntry === '' ? null : Number(editEntry) });
+      setEditingId(null);
+      await onRefresh();
+      onToast(`Setup #${item.setup_number} recalculated.`);
+    } catch (error) { onError(error); } finally { setLoading(false); }
+  };
+  const renderAnalysis = (item) => {
+    const result = item.result;
     const currency = item.base_currency || account?.base_currency || result.currency || 'USD';
-    return <section className="panel signal-result" key={key}>
-      <div className="table-heading"><div><div className="eyebrow">{item.signal_date || date} · SETUP #{item.setup_number || result.parsed?.setup_number}</div><h2>{item.side || result.parsed?.side} {item.standard_symbol || result.parsed?.standard_symbol}</h2><p className="muted text-xs mt-2">Zone {number(item.zone_low ?? result.parsed?.zone_low, 6)}–{number(item.zone_high ?? result.parsed?.zone_high, 6)} · SL {number(item.stop_loss ?? result.parsed?.stop_loss, 6)} · TP1 {number(item.take_profit ?? result.parsed?.take_profit, 6)} · 0.01 lot per entry</p></div>{item.id && <button className="danger" onClick={() => deleteAnalysis(item)}>Delete signal</button>}</div>
-      <div className="signal-totals"><div><small>Total estimated P&amp;L</small><strong className={result.total_pnl < 0 ? 'negative' : 'positive'}><MoneyValue value={result.total_pnl} currency={currency} fx={fx} /></strong></div><div><small>Starting balance</small><strong><MoneyValue value={item.starting_balance ?? Number(startingBalance)} currency={currency} fx={fx} /></strong></div><div><small>Approximate balance</small><strong className={result.projected_balance < (item.starting_balance ?? Number(startingBalance)) ? 'negative' : 'positive'}><MoneyValue value={result.projected_balance} currency={currency} fx={fx} /></strong></div></div>
-      {result.trades?.length ? <div className="table-scroll"><table><thead><tr><th>Trade</th><th>Entry</th><th>Exit</th><th>Outcome</th><th>Gross</th><th>Est. fees</th><th>Net P&amp;L</th></tr></thead><tbody>{result.trades.map((trade, index) => <tr key={`${trade.entry}-${index}`}><td>Entry {index + 1}<small>{trade.source?.startsWith('selected') ? 'Selected result + broker pricing' : trade.source?.startsWith('confirmed') ? 'Copied update + broker spread' : 'Broker tick replay'}</small></td><td>{number(trade.entry, 6)}{trade.signal_entry != null && <small>Signal {number(trade.signal_entry, 6)}</small>}{trade.reported_pips != null && <small>{number(trade.reported_pips, 1)} reported pips</small>}</td><td>{number(trade.exit, 6)}</td><td><span className={`result ${trade.net_pnl < 0 ? 'loss' : trade.status === 'OPEN_AT_DAY_END' ? 'be' : 'win'}`}>{trade.status}</span></td><td className={trade.gross_pnl < 0 ? 'negative' : 'positive'}>{money(trade.gross_pnl, currency)}</td><td>{money(trade.estimated_fees, currency)}</td><td className={trade.net_pnl < 0 ? 'negative' : 'positive'}><MoneyValue value={trade.net_pnl} currency={currency} fx={fx} /></td></tr>)}</tbody></table></div> : <div className="empty-table">The entry zone was not reached in the broker’s available tick history for this date.</div>}
+    const balance = Number(item.starting_balance || 0);
+    const pnlPct = result.pnl_pct ?? (balance > 0 ? Number(result.total_pnl || 0) / balance * 100 : null);
+    return <section className="panel signal-result" key={item.id}>
+      <div className="table-heading"><div><div className="eyebrow">{item.signal_date} · SETUP #{item.setup_number}</div><h2>{item.side} {item.standard_symbol}</h2><p className="muted text-xs mt-2">Zone {number(item.zone_low, 6)}–{number(item.zone_high, 6)} · SL {number(item.stop_loss, 6)} · TP1 {number(item.take_profit, 6)} · 0.01 lot</p></div><div className="flex gap-3"><button type="button" onClick={() => { setEditingId(item.id); setEditEntry(String(item.entry_price ?? result.trades?.[0]?.signal_entry ?? result.trades?.[0]?.entry ?? '')); setEditOutcome(item.raw_outcome || result.market_status || 'TP1'); }}>Edit</button><button type="button" className="danger" onClick={() => deleteAnalysis(item)}>Delete signal</button></div></div>
+      {editingId === item.id && <form className="signal-edit-row" onSubmit={(event) => { event.preventDefault(); updateAnalysis(item); }}><Field label={`Exact entry (${number(item.zone_low, 6)}–${number(item.zone_high, 6)})`}><input type="number" min={item.zone_low} max={item.zone_high} step="0.01" value={editEntry} onChange={(event) => setEditEntry(event.target.value)} placeholder="Use broker-detected entry" /></Field><Field label="Result"><select value={editOutcome} onChange={(event) => setEditOutcome(event.target.value)}><option value="TP1">TP1 hit</option><option value="SL">Stop loss hit</option></select></Field><button className="primary" disabled={loading}>{loading ? 'Recalculating…' : 'Save and recalculate'}</button><button type="button" onClick={() => setEditingId(null)}>Cancel</button></form>}
+      <div className="signal-totals"><div><small>Total estimated P&amp;L</small><strong className={result.total_pnl < 0 ? 'negative' : 'positive'}><MoneyValue value={result.total_pnl} currency={currency} fx={fx} /><small>{pnlPct == null ? '—' : `${number(pnlPct, 2)}%`} of opening balance</small></strong></div><div><small>Opening journey balance</small><strong><MoneyValue value={balance} currency={currency} fx={fx} /></strong></div><div><small>Balance after signal</small><strong className={result.projected_balance < balance ? 'negative' : 'positive'}><MoneyValue value={result.projected_balance} currency={currency} fx={fx} /></strong></div></div>
+      {result.trades?.length ? <div className="table-scroll"><table><thead><tr><th>Trade</th><th>Entry</th><th>Exit</th><th>Outcome</th><th>Gross</th><th>Est. fees</th><th>Net P&amp;L</th></tr></thead><tbody>{result.trades.map((trade, index) => <tr key={`${trade.entry}-${index}`}><td>Entry {index + 1}<small>{trade.source?.startsWith('selected entry') ? 'Exact entry + broker pricing' : trade.source?.startsWith('selected') ? 'Selected result + broker pricing' : trade.source?.startsWith('confirmed') ? 'Copied update + broker spread' : 'Broker tick replay'}</small></td><td>{number(trade.entry, 6)}{trade.signal_entry != null && <small>Chosen {number(trade.signal_entry, 6)}</small>}</td><td>{number(trade.exit, 6)}</td><td><span className={`result ${trade.net_pnl < 0 ? 'loss' : 'win'}`}>{trade.status}</span></td><td className={trade.gross_pnl < 0 ? 'negative' : 'positive'}>{money(trade.gross_pnl, currency)}</td><td>{money(trade.estimated_fees, currency)}</td><td className={trade.net_pnl < 0 ? 'negative' : 'positive'}><MoneyValue value={trade.net_pnl} currency={currency} fx={fx} /><small>{number(trade.net_pnl_pct ?? (balance > 0 ? trade.net_pnl / balance * 100 : 0), 2)}% of balance</small></td></tr>)}</tbody></table></div> : <div className="empty-table">No calculated trade is available.</div>}
       <div className="signal-method"><span>{number(result.tick_count, 0)} broker ticks checked</span><span>Median spread: {number(result.spread_points, 1)} points</span><span>{result.fee_sample_size ? `Fees estimated from ${result.fee_sample_size} completed ${result.symbol} trades` : 'No comparable fee history; commission estimate is $0.00'}</span></div>
     </section>;
   };
   return <div className="signal-page">
-    <section className="panel signal-form-panel"><div><div className="eyebrow">TP1 / SL SIGNAL REPLAY</div><h2>Analyze a trade signal</h2><p className="muted mt-2">Paste one setup and choose whether TP1 or SL was hit. Meridian accepts your selected result and uses the broker’s historical pricing to calculate it.</p></div>
-      <form onSubmit={async (event) => { event.preventDefault(); const values = Object.fromEntries(new FormData(event.currentTarget)); try { setLoading(true); const result = await call('signals:analyze', { account_id: Number(accountId), signal_date: date, setup_text: values.setup, outcome: values.outcome, starting_balance: Number(startingBalance) }); setLatest({ ...result, signal_date: date, setup_number: result.parsed.setup_number, starting_balance: Number(startingBalance), side: result.parsed.side, standard_symbol: result.parsed.standard_symbol, zone_low: result.parsed.zone_low, zone_high: result.parsed.zone_high, stop_loss: result.parsed.stop_loss, take_profit: result.parsed.take_profit, base_currency: account?.base_currency }); setHistoryDate(date); await onRefresh(); onToast(`Setup #${result.parsed.setup_number} analyzed and saved.`); } catch (error) { onError(error); } finally { setLoading(false); } }} className="signal-form">
-        <div className="signal-fields"><Field label="Broker account"><select value={accountId} onChange={(event) => setAccountId(event.target.value)}>{accounts.map((item) => <option key={item.id} value={item.id}>{item.display_name} · {item.broker_name}</option>)}</select></Field><Field label="Signal date"><input type="date" value={date} onChange={(event) => setDate(event.target.value)} required /></Field><Field label="Starting account balance"><input type="number" min="0" step="0.01" value={startingBalance} onChange={(event) => setStartingBalance(event.target.value)} required /></Field><Field label="Lot size"><input value="0.01" disabled /></Field></div>
+    <section className="panel signal-journey-panel"><div><div className="eyebrow">SIMULATED TRADING JOURNEY</div><h2>Carry every result into the next trade</h2><p className="muted mt-2">Signals are ordered by date and setup number. Each TP1 or SL changes the opening balance used by the next signal.</p></div><div className="risk-fields"><Field label="Journey start date"><input type="date" value={journeyDate} onChange={(event) => setJourneyDate(event.target.value)} /></Field><Field label="Starting capital"><input type="number" min="0" step="0.01" value={journeyCapital} onChange={(event) => setJourneyCapital(event.target.value)} /></Field><button className="primary" type="button" onClick={saveJourney}>Save and recalculate</button></div><div className="signal-filter-totals"><div><small>Starting capital</small><strong><MoneyValue value={Number(journeyCapital || 0)} currency={account?.base_currency} fx={fx} /></strong></div><div><small>Journey P&amp;L</small><strong className={journeyPnl < 0 ? 'negative' : 'positive'}><MoneyValue value={journeyPnl} currency={account?.base_currency} fx={fx} /><small>{Number(journeyCapital) > 0 ? `${number(journeyPnl / Number(journeyCapital) * 100, 2)}%` : '—'}</small></strong></div><div><small>Current simulated balance</small><strong><MoneyValue value={journeyBalance} currency={account?.base_currency} fx={fx} /></strong></div></div></section>
+    <section className="panel signal-form-panel"><div><div className="eyebrow">TP1 / SL SIGNAL REPLAY</div><h2>Analyze a trade signal</h2><p className="muted mt-2">Paste one setup and choose whether TP1 or SL was hit. Add your exact entry when it differs from the zone edge.</p></div>
+      <form onSubmit={async (event) => { event.preventDefault(); const form = event.currentTarget; const values = Object.fromEntries(new FormData(form)); try { setLoading(true); await call('signals:journey', { account_id: Number(accountId), start_date: journeyDate, starting_capital: Number(journeyCapital) }); const result = await call('signals:analyze', { account_id: Number(accountId), signal_date: date, setup_text: values.setup, outcome: values.outcome, ...(values.entry_price ? { entry_price: Number(values.entry_price) } : {}) }); setHistoryDate(date); await onRefresh(); onToast(`Setup #${result.parsed.setup_number} analyzed and added to the journey.`); form.reset(); } catch (error) { onError(error); } finally { setLoading(false); } }} className="signal-form">
+        <div className="signal-fields"><Field label="Broker account"><select value={accountId} onChange={(event) => setAccountId(event.target.value)}>{accounts.map((item) => <option key={item.id} value={item.id}>{item.display_name} · {item.broker_name}</option>)}</select></Field><Field label="Signal date"><input type="date" value={date} onChange={(event) => setDate(event.target.value)} required /></Field><Field label="Exact entry inside zone"><input name="entry_price" type="number" min="0" step="0.01" placeholder="Optional" /></Field><Field label="Lot size"><input value="0.01" disabled /></Field></div>
         <Field label="Trade setup text"><textarea name="setup" rows="8" required placeholder={'TRADE SETUP #4 – October 8, 2026\n\nSELL XAUUSD ZONE : 4140 - 4143\nSL: 4148\nTP: 4135 - 4130 - 4020'} /></Field>
         <Field label="What was hit first?"><select name="outcome" defaultValue="TP1"><option value="TP1">TP1 hit</option><option value="SL">Stop loss hit</option></select></Field>
-        <button className="primary" disabled={loading || !account}>{loading ? 'Checking broker history…' : 'Analyze and save signal'}</button>
+        <button className="primary" disabled={loading || !account}>{loading ? 'Calculating with broker pricing…' : 'Analyze and add to journey'}</button>
       </form>
-      <p className="notice">The header date must match the selected date. BUY signals require SL below the zone and TP1 above it; SELL signals require the opposite. Duplicate setup numbers and repeated signals are rejected.</p>
+      <p className="notice">The exact entry must be inside the signal zone. Changing an older signal automatically recalculates every later journey balance.</p>
     </section>
-    <section className="panel signal-daily-summary"><div className="table-heading"><div><div className="eyebrow">DAILY RESULTS</div><h2>Profit and loss by date</h2><p className="muted text-xs mt-2">Choose a date to narrow both this summary and the individual trade results below.</p></div><Field label="Date filter"><select value={historyDate} onChange={(event) => { setHistoryDate(event.target.value); setLatest(null); }}><option value="all">All dates</option>{availableDates.map((item) => <option key={item} value={item}>{new Date(`${item}T12:00:00`).toLocaleDateString(undefined, { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' })}</option>)}</select></Field></div>
+    <section className="panel signal-daily-summary"><div className="table-heading"><div><div className="eyebrow">DAILY RESULTS</div><h2>Profit and loss by date</h2><p className="muted text-xs mt-2">Choose a date to narrow this summary and the signals below.</p></div><Field label="Date filter"><select value={historyDate} onChange={(event) => setHistoryDate(event.target.value)}><option value="all">All dates</option>{availableDates.map((item) => <option key={item} value={item}>{new Date(`${item}T12:00:00`).toLocaleDateString(undefined, { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' })}</option>)}</select></Field></div>
       <div className="signal-filter-totals"><div><small>Days</small><strong>{filteredTotals.days}</strong></div><div><small>Setups</small><strong>{filteredTotals.setups}</strong></div><div><small>Trades</small><strong>{filteredTotals.trades}</strong></div><div><small>Net P&amp;L</small><strong className={filteredTotals.pnl < 0 ? 'negative' : 'positive'}><MoneyValue value={filteredTotals.pnl} currency={account?.base_currency} fx={fx} /></strong></div></div>
-      <div className="table-scroll"><table><thead><tr><th>Date</th><th>Signal setups</th><th>Individual trades</th><th>Daily profit / loss</th></tr></thead><tbody>{visibleDays.map((day) => <tr key={day.date}><td><button className="date-link" onClick={() => { setHistoryDate(day.date); setLatest(null); }}>{new Date(`${day.date}T12:00:00`).toLocaleDateString(undefined, { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' })}</button></td><td>{day.setups}</td><td>{day.trades}</td><td className={day.pnl < 0 ? 'negative' : 'positive'}><MoneyValue value={day.pnl} currency={account?.base_currency} fx={fx} /></td></tr>)}</tbody></table>{!visibleDays.length && <div className="empty-table">No saved signal results for this date.</div>}</div>
+      <div className="table-scroll"><table><thead><tr><th>Date</th><th>Signal setups</th><th>Individual trades</th><th>Daily profit / loss</th></tr></thead><tbody>{visibleDays.map((day) => <tr key={day.date}><td><button className="date-link" onClick={() => setHistoryDate(day.date)}>{new Date(`${day.date}T12:00:00`).toLocaleDateString(undefined, { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' })}</button></td><td>{day.setups}</td><td>{day.trades}</td><td className={day.pnl < 0 ? 'negative' : 'positive'}><MoneyValue value={day.pnl} currency={account?.base_currency} fx={fx} /><small>{day.opening > 0 ? `${number(day.pnl / day.opening * 100, 2)}% of opening balance` : '—'}</small></td></tr>)}</tbody></table>{!visibleDays.length && <div className="empty-table">No saved signal results for this date.</div>}</div>
     </section>
-    {latest && (historyDate === 'all' || latest.signal_date === historyDate) && renderAnalysis(latest, 'latest')}
-    <div className="signal-history"><div className="table-heading"><div><h2>{historyDate === 'all' ? 'Saved signal analyses' : `Trades for ${new Date(`${historyDate}T12:00:00`).toLocaleDateString()}`}</h2><p className="muted text-xs mt-2">Each setup shows the profit or loss for every 0.01-lot entry.</p></div><span className="count">{filteredHistory.length + (latest && (historyDate === 'all' || latest.signal_date === historyDate) ? 1 : 0)}</span></div>{filteredHistory.map((item) => renderAnalysis(item, item.id))}{!filteredHistory.length && !latest && <div className="empty-table">No signal analyses saved for this date.</div>}</div>
+    <div className="signal-history"><div className="table-heading"><div><h2>{historyDate === 'all' ? 'Saved signal analyses' : `Signals for ${new Date(`${historyDate}T12:00:00`).toLocaleDateString()}`}</h2><p className="muted text-xs mt-2">Each setup shows its entry, P&amp;L percentage, opening balance, and resulting journey balance.</p></div><span className="count">{filteredHistory.length}</span></div>{filteredHistory.map(renderAnalysis)}{!filteredHistory.length && <div className="empty-table">No signal analyses saved for this date.</div>}</div>
   </div>;
 }
 
@@ -520,6 +551,7 @@ function App() {
       alertMode: 'tone',
       cashFlows: [],
       signalAnalyses: [],
+      signalJourneys: [],
     }),
     [filters, setFilters] = useState({}),
     [accountScope, setAccountScope] = useState('active'),
@@ -1029,7 +1061,7 @@ function App() {
           ) : tab === 'Risk analysis' ? (
             <RiskAnalysisPage accounts={data.accounts} activeAccountId={data.activeAccount} fx={fx} onError={fail} />
           ) : tab === 'Signal analysis' ? (
-            <SignalAnalysisPage accounts={data.accounts} activeAccountId={data.activeAccount} analyses={data.signalAnalyses || []} fx={fx} onRefresh={refresh} onError={fail} onToast={setToast} />
+            <SignalAnalysisPage accounts={data.accounts} activeAccountId={data.activeAccount} analyses={data.signalAnalyses || []} journeys={data.signalJourneys || []} fx={fx} onRefresh={refresh} onError={fail} onToast={setToast} />
           ) : null}
           <footer className="page-footer">
             <span>MERIDIAN JOURNAL</span>

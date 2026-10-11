@@ -13,6 +13,8 @@ const channels = [
   'daily:save',
   'returns:read',
   'signals:analyze',
+  'signals:journey',
+  'signals:update',
   'signals:risk',
   'signals:delete',
   'mappings:save',

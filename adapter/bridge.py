@@ -454,7 +454,18 @@ class Adapter:
 
         reported = params.get("reported_entries") or []
         trades = []
-        if reported and (params.get("tp1_confirmed") or params.get("stop_confirmed")):
+        selected_entry = params.get("entry_price")
+        if selected_entry is not None and (params.get("tp1_confirmed") or params.get("stop_confirmed")):
+            signal_entry = float(selected_entry)
+            signal_exit = take_profit if params.get("tp1_confirmed") else stop_loss
+            status = "TP1" if params.get("tp1_confirmed") else "SL"
+            entry_price = signal_entry + median_spread if side == "BUY" else signal_entry
+            exit_price = signal_exit if side == "BUY" else signal_exit + median_spread
+            trades.append(calculate(
+                entry_price, exit_price, status,
+                source="selected entry + broker historical pricing", signal_entry=signal_entry,
+            ))
+        elif reported and (params.get("tp1_confirmed") or params.get("stop_confirmed")):
             signal_exit = take_profit if params.get("tp1_confirmed") else stop_loss
             status = "TP1" if params.get("tp1_confirmed") else "SL"
             for item in reported:

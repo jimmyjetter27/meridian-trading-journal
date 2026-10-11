@@ -15,8 +15,9 @@ CREATE TABLE IF NOT EXISTS app_settings(key TEXT PRIMARY KEY,value TEXT NOT NULL
 CREATE TABLE IF NOT EXISTS capital_events(id INTEGER PRIMARY KEY,account_id INTEGER NOT NULL REFERENCES accounts(id),ticket_number TEXT NOT NULL,occurred_at TEXT NOT NULL,amount REAL NOT NULL,kind TEXT NOT NULL DEFAULT '',comment TEXT NOT NULL DEFAULT '',UNIQUE(account_id,ticket_number));
 CREATE INDEX IF NOT EXISTS capital_events_time ON capital_events(account_id,occurred_at);
 CREATE TABLE IF NOT EXISTS account_balances(account_id INTEGER PRIMARY KEY REFERENCES accounts(id),balance REAL NOT NULL,captured_at TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS signal_analyses(id INTEGER PRIMARY KEY,account_id INTEGER NOT NULL REFERENCES accounts(id),signal_date TEXT NOT NULL,setup_number INTEGER NOT NULL,standard_symbol TEXT NOT NULL,broker_symbol TEXT NOT NULL,side TEXT NOT NULL CHECK(side IN ('BUY','SELL')),zone_low REAL NOT NULL,zone_high REAL NOT NULL,stop_loss REAL NOT NULL,take_profit REAL NOT NULL,lot_size REAL NOT NULL DEFAULT 0.01 CHECK(lot_size=0.01),starting_balance REAL NOT NULL,raw_setup TEXT NOT NULL,raw_outcome TEXT NOT NULL DEFAULT '',result_json TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,UNIQUE(account_id,signal_date,setup_number));
+CREATE TABLE IF NOT EXISTS signal_analyses(id INTEGER PRIMARY KEY,account_id INTEGER NOT NULL REFERENCES accounts(id),signal_date TEXT NOT NULL,setup_number INTEGER NOT NULL,standard_symbol TEXT NOT NULL,broker_symbol TEXT NOT NULL,side TEXT NOT NULL CHECK(side IN ('BUY','SELL')),zone_low REAL NOT NULL,zone_high REAL NOT NULL,stop_loss REAL NOT NULL,take_profit REAL NOT NULL,lot_size REAL NOT NULL DEFAULT 0.01 CHECK(lot_size=0.01),starting_balance REAL NOT NULL,entry_price REAL,raw_setup TEXT NOT NULL,raw_outcome TEXT NOT NULL DEFAULT '',result_json TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,UNIQUE(account_id,signal_date,setup_number));
 CREATE INDEX IF NOT EXISTS signal_analyses_date ON signal_analyses(signal_date DESC,setup_number DESC);
+CREATE TABLE IF NOT EXISTS signal_journeys(account_id INTEGER PRIMARY KEY REFERENCES accounts(id),start_date TEXT NOT NULL,starting_capital REAL NOT NULL CHECK(starting_capital>=0),updated_at TEXT NOT NULL);
 `;
 export function openDatabase(path) {
   const db = new Database(path);
@@ -42,7 +43,20 @@ export function openDatabase(path) {
   if (!tradeColumns.has('close_reason')) {
     db.exec("ALTER TABLE trades ADD COLUMN close_reason TEXT NOT NULL DEFAULT 'UNKNOWN' CHECK(close_reason IN ('MANUAL','TP','SL','UNKNOWN'))");
   }
-  db.pragma('user_version=8');
+  const signalColumns = new Set(db.prepare('PRAGMA table_info(signal_analyses)').all().map((column) => column.name));
+  if (!signalColumns.has('entry_price')) db.exec('ALTER TABLE signal_analyses ADD COLUMN entry_price REAL');
+  const journeySeed = db.prepare(
+    `SELECT account_id,signal_date AS start_date,starting_balance AS starting_capital
+     FROM signal_analyses source
+     WHERE id=(SELECT id FROM signal_analyses candidate WHERE candidate.account_id=source.account_id ORDER BY signal_date,setup_number,id LIMIT 1)
+     ORDER BY account_id`,
+  ).all();
+  const seedJourney = db.prepare(
+    'INSERT OR IGNORE INTO signal_journeys(account_id,start_date,starting_capital,updated_at) VALUES(?,?,?,?)',
+  );
+  const now = new Date().toISOString();
+  for (const row of journeySeed) seedJourney.run(row.account_id, row.start_date, row.starting_capital, now);
+  db.pragma('user_version=9');
   return db;
 }
 export const publicAccounts = (db) =>
@@ -73,6 +87,7 @@ export function packageData(db) {
     capital_events: db.prepare('SELECT * FROM capital_events').all(),
     account_balances: db.prepare('SELECT * FROM account_balances').all(),
     signal_analyses: db.prepare('SELECT * FROM signal_analyses').all(),
+    signal_journeys: db.prepare('SELECT * FROM signal_journeys').all(),
   };
 }
 const portable = z.object({
@@ -100,17 +115,20 @@ const portable = z.object({
     id: z.number().int().positive(), account_id: z.number().int().positive(), signal_date: z.string(),
     setup_number: z.number().int().positive(), standard_symbol: z.string(), broker_symbol: z.string(),
     side: z.enum(['BUY', 'SELL']), zone_low: z.number(), zone_high: z.number(), stop_loss: z.number(),
-    take_profit: z.number(), lot_size: z.literal(0.01), starting_balance: z.number(), raw_setup: z.string(),
+    take_profit: z.number(), lot_size: z.literal(0.01), starting_balance: z.number(), entry_price: z.number().positive().nullable().optional(), raw_setup: z.string(),
     raw_outcome: z.string(), result_json: z.string(), created_at: z.string(), updated_at: z.string(),
   })).max(100000).default([]),
+  signal_journeys: z.array(z.object({
+    account_id: z.number().int().positive(), start_date: z.string(), starting_capital: z.number().nonnegative(), updated_at: z.string(),
+  })).max(10000).default([]),
 });
 export function restorePackage(db, input) {
   const data = portable.parse(input);
   db.transaction(() => {
     db.exec(
-      'DELETE FROM execution_log; DELETE FROM price_alerts; DELETE FROM capital_events; DELETE FROM account_balances; DELETE FROM signal_analyses; DELETE FROM daily_entries; DELETE FROM trades; DELETE FROM symbol_mappings; DELETE FROM accounts; DELETE FROM app_settings;',
+      'DELETE FROM execution_log; DELETE FROM price_alerts; DELETE FROM capital_events; DELETE FROM account_balances; DELETE FROM signal_journeys; DELETE FROM signal_analyses; DELETE FROM daily_entries; DELETE FROM trades; DELETE FROM symbol_mappings; DELETE FROM accounts; DELETE FROM app_settings;',
     );
-    for (const table of ['accounts', 'symbol_mappings', 'trades', 'daily_entries', 'price_alerts', 'capital_events', 'account_balances', 'signal_analyses', 'app_settings'])
+    for (const table of ['accounts', 'symbol_mappings', 'trades', 'daily_entries', 'price_alerts', 'capital_events', 'account_balances', 'signal_analyses', 'signal_journeys', 'app_settings'])
       for (const row of data[table]) insertObject(db, table, row);
     db.prepare("INSERT OR IGNORE INTO app_settings(key,value) VALUES('alert_mode','tone')").run();
   })();

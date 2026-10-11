@@ -24,7 +24,7 @@ try {
   const result = await bridge.request('signal.backtest', {
     symbol: 'XAUUSD-VIP', date_from: '2026-10-08T00:00:00.000Z', date_to: '2026-10-08T23:59:59.999Z',
     side: 'BUY', zone_low: 4117, zone_high: 4120, stop_loss: 4112, take_profit: 4125, lot_size: 0.01,
-    tp1_confirmed: true, stop_confirmed: false, reported_entries: [],
+    tp1_confirmed: true, stop_confirmed: false, reported_entries: [], entry_price: 4118.5,
   }, undefined, 60000);
   const risk = await bridge.request('signal.risk', {
     symbol: 'XAUUSD-VIP', side: 'BUY', stop_loss: 4168, take_profit: 4188,

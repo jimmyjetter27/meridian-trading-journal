@@ -81,10 +81,31 @@ export function validateSignalDate(parsed, selectedDate) {
 
 export function summarizeSignalAnalysis(result, startingBalance) {
   const total = result.trades.reduce((sum, trade) => sum + Number(trade.net_pnl || 0), 0);
+  const balance = Number(startingBalance);
   return {
     total_pnl: total,
-    projected_balance: Number(startingBalance) + total,
+    pnl_pct: balance > 0 ? total / balance * 100 : null,
+    projected_balance: balance + total,
     wins: result.trades.filter((trade) => trade.net_pnl > 0).length,
     losses: result.trades.filter((trade) => trade.net_pnl < 0).length,
+    trades: result.trades.map((trade) => ({
+      ...trade,
+      net_pnl_pct: balance > 0 ? Number(trade.net_pnl || 0) / balance * 100 : null,
+    })),
   };
+}
+
+export function applySignalJourney(rows, startDate, startingCapital) {
+  let balance = Number(startingCapital);
+  return [...rows]
+    .sort((a, b) => a.signal_date.localeCompare(b.signal_date) || a.setup_number - b.setup_number || a.id - b.id)
+    .map((row) => {
+      if (row.signal_date < startDate) return row;
+      const result = typeof row.result_json === 'string' ? JSON.parse(row.result_json) : row.result;
+      const summary = summarizeSignalAnalysis(result, balance);
+      const updated = { ...result, ...summary };
+      const next = { ...row, starting_balance: balance, result: updated, result_json: JSON.stringify(updated) };
+      balance = summary.projected_balance;
+      return next;
+    });
 }
