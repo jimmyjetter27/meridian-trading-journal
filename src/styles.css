@@ -631,6 +631,9 @@ tbody tr:hover {
 .close-reason.tp { color: #72dfbd; border-color: #28584d; }
 .close-reason.sl { color: #ff8fa1; border-color: #66333c; }
 .close-reason.manual { color: #d9b76c; border-color: #655737; }
+.manual-potential { display: grid; grid-template-columns: auto 1fr; gap: 3px 8px; min-width: 145px; }
+.manual-potential small { color: #8291a4; }
+.manual-potential span { text-align: right; white-space: nowrap; }
 .returns-chart-panel { padding: 22px 24px 16px; }
 .returns-bars { display: flex; align-items: flex-end; gap: 7px; min-height: 265px; margin-top: 20px; overflow-x: auto; padding: 10px 2px 4px; }
 .return-bar-column { display: grid; grid-template-rows: 18px 190px 32px; gap: 5px; align-items: end; min-width: 42px; flex: 1; color: #8494a8; text-align: center; font-size: 8px; }

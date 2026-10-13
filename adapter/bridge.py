@@ -93,9 +93,14 @@ class Adapter:
         # Some broker servers report deal timestamps a few minutes ahead of the
         # workstation clock. A one-day read-only look-ahead prevents a completed
         # deal from disappearing until the local clock catches up.
-        deals = mt5.history_deals_get(start, datetime.now(timezone.utc) + timedelta(days=1))
+        end = datetime.now(timezone.utc) + timedelta(days=1)
+        deals = mt5.history_deals_get(start, end)
         if deals is None:
             raise RuntimeError(f"MT5 history request failed: {mt5.last_error()}")
+        orders_by_position = defaultdict(list)
+        for order in mt5.history_orders_get(start, end) or []:
+            if getattr(order, "position_id", 0):
+                orders_by_position[int(order.position_id)].append(order)
 
         positions = defaultdict(list)
         balance_events = []
@@ -154,6 +159,23 @@ class Adapter:
                 + float(getattr(deal, "fee", 0.0))
                 for deal in group
             )
+            stop_loss = None
+            take_profit = None
+            for order in sorted(orders_by_position.get(position_id, []), key=lambda order: (order.time_setup_msc or order.time_setup * 1000, order.ticket)):
+                if float(getattr(order, "sl", 0.0) or 0.0) > 0:
+                    stop_loss = float(order.sl)
+                if float(getattr(order, "tp", 0.0) or 0.0) > 0:
+                    take_profit = float(order.tp)
+            order_type = mt5.ORDER_TYPE_BUY if opening.type == mt5.DEAL_TYPE_BUY else mt5.ORDER_TYPE_SELL
+            recorded_costs = sum(
+                float(deal.commission) + float(deal.swap) + float(getattr(deal, "fee", 0.0))
+                for deal in group
+            )
+            def potential_at(target):
+                if target is None:
+                    return None
+                value = mt5.order_calc_profit(order_type, opening.symbol, entry_volume, open_price, target)
+                return float(value) + recorded_costs if value is not None else None
             rows.append(
                 {
                     "ticket_number": f"{account.login}:{position_id}",
@@ -170,6 +192,10 @@ class Adapter:
                     "pips": None,
                     "status": "WIN" if net_pnl > 0 else "LOSS" if net_pnl < 0 else "BE",
                     "close_reason": close_reason,
+                    "stop_loss": stop_loss,
+                    "take_profit": take_profit,
+                    "potential_loss_at_sl": potential_at(stop_loss),
+                    "potential_profit_at_tp": potential_at(take_profit),
                     "setup_tags": "[]",
                     "mistake_tags": "[]",
                     "notes": "Synced from MetaTrader 5",

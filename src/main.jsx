@@ -989,6 +989,7 @@ function App() {
                           ['trade_return_pct', 'P/L %'],
                           ['status', 'Result'],
                           ['close_reason', 'Closed by'],
+                          ['potential_loss_at_sl', 'SL / TP potential'],
                         ].map(([key, label]) => (
                           <th key={key}>
                             <button
@@ -1028,6 +1029,7 @@ function App() {
                             <span className={`result ${t.status.toLowerCase()}`}>{t.status}</span>
                           </td>
                           <td><span className={`close-reason ${(t.close_reason || 'UNKNOWN').toLowerCase()}`}>{t.close_reason === 'MANUAL' ? 'Manual' : t.close_reason || 'Unknown'}</span></td>
+                          <td>{t.close_reason === 'MANUAL' ? <div className="manual-potential"><small>SL {t.stop_loss ? number(t.stop_loss, 6) : 'not recorded'}</small><span className={t.potential_loss_at_sl == null ? '' : t.potential_loss_at_sl < 0 ? 'negative' : t.potential_loss_at_sl > 0 ? 'positive' : ''}>{t.potential_loss_at_sl == null ? '—' : <MoneyValue value={t.potential_loss_at_sl} currency={t.base_currency} fx={fx} />}</span><small>TP {t.take_profit ? number(t.take_profit, 6) : 'not recorded'}</small><span className={t.potential_profit_at_tp == null ? '' : t.potential_profit_at_tp < 0 ? 'negative' : t.potential_profit_at_tp > 0 ? 'positive' : ''}>{t.potential_profit_at_tp == null ? '—' : <MoneyValue value={t.potential_profit_at_tp} currency={t.base_currency} fx={fx} />}</span></div> : '—'}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -1100,7 +1102,7 @@ function App() {
       )}
       {selected && (
         <Modal title={`Trade #${selected.ticket_number}`} onClose={() => setSelected(null)}>
-          <dl className="review trade-result-review"><dt>Realized P&amp;L</dt><dd className={selected.net_pnl < 0 ? 'negative' : 'positive'}>{moneyPairText(selected.net_pnl, selected.base_currency, fx)}</dd><dt>Profit / loss percentage</dt><dd className={selected.net_pnl < 0 ? 'negative' : 'positive'}>{selected.trade_return_pct == null ? '—' : `${selected.trade_return_pct.toFixed(2)}%`}</dd><dt>Closed by</dt><dd>{selected.close_reason === 'MANUAL' ? 'Manual close' : selected.close_reason === 'TP' ? 'Take profit trigger' : selected.close_reason === 'SL' ? 'Stop loss trigger' : 'Unknown (imported trade)'}</dd><dt>Capital before close</dt><dd>{moneyPairText(selected.capital_at_trade, selected.base_currency, fx)}</dd></dl>
+          <dl className="review trade-result-review"><dt>Realized P&amp;L</dt><dd className={selected.net_pnl < 0 ? 'negative' : 'positive'}>{moneyPairText(selected.net_pnl, selected.base_currency, fx)}</dd><dt>Profit / loss percentage</dt><dd className={selected.net_pnl < 0 ? 'negative' : 'positive'}>{selected.trade_return_pct == null ? '—' : `${selected.trade_return_pct.toFixed(2)}%`}</dd><dt>Closed by</dt><dd>{selected.close_reason === 'MANUAL' ? 'Manual close' : selected.close_reason === 'TP' ? 'Take profit trigger' : selected.close_reason === 'SL' ? 'Stop loss trigger' : 'Unknown (imported trade)'}</dd>{selected.close_reason === 'MANUAL' && <><dt>Potential result at assigned SL</dt><dd className={selected.potential_loss_at_sl == null ? '' : selected.potential_loss_at_sl < 0 ? 'negative' : selected.potential_loss_at_sl > 0 ? 'positive' : ''}>{selected.stop_loss ? `${number(selected.stop_loss, 6)} · ` : ''}{selected.potential_loss_at_sl == null ? 'Not recorded by broker' : moneyPairText(selected.potential_loss_at_sl, selected.base_currency, fx)}</dd><dt>Potential result at assigned TP</dt><dd className={selected.potential_profit_at_tp == null ? '' : selected.potential_profit_at_tp < 0 ? 'negative' : selected.potential_profit_at_tp > 0 ? 'positive' : ''}>{selected.take_profit ? `${number(selected.take_profit, 6)} · ` : ''}{selected.potential_profit_at_tp == null ? 'Not recorded by broker' : moneyPairText(selected.potential_profit_at_tp, selected.base_currency, fx)}</dd></>}<dt>Capital before close</dt><dd>{moneyPairText(selected.capital_at_trade, selected.base_currency, fx)}</dd></dl>
           <form
             onSubmit={(e) => {
               e.preventDefault();

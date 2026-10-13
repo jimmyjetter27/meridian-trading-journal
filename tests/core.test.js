@@ -68,7 +68,7 @@ test('account schema migration provides an account-specific MT5 terminal path', 
     const account = publicAccounts(db)[0];
     assert.equal(account.terminal_path, 'C:\\Program Files\\MetaTrader 5\\terminal64.exe');
     assert.equal(account.tracking_since, '2000-01-01T00:00:00.000Z');
-    assert.equal(db.pragma('user_version', { simple: true }), 9);
+    assert.equal(db.pragma('user_version', { simple: true }), 10);
   } finally {
     db.close();
   }
@@ -442,6 +442,10 @@ test('MT5 history sync verifies identity, maps symbols, and deduplicates positio
           pips: null,
           status: 'WIN',
           close_reason: 'TP',
+          stop_loss: 1990,
+          take_profit: 2010,
+          potential_loss_at_sl: -105,
+          potential_profit_at_tp: 95,
           setup_tags: '[]',
           mistake_tags: '[]',
           notes: 'Synced from MetaTrader 5',
@@ -452,7 +456,12 @@ test('MT5 history sync verifies identity, maps symbols, and deduplicates positio
     assert.equal((await syncMt5History(db, bridge, account, snapshot)).inserted, 1);
     assert.equal((await syncMt5History(db, bridge, account, snapshot)).duplicates, 1);
     assert.equal(db.prepare('SELECT count(*) AS total FROM trades').get().total, 1);
-    assert.equal(db.prepare('SELECT close_reason FROM trades').get().close_reason, 'TP');
+    const synced = db.prepare('SELECT close_reason,stop_loss,take_profit,potential_loss_at_sl,potential_profit_at_tp FROM trades').get();
+    assert.equal(synced.close_reason, 'TP');
+    assert.equal(synced.stop_loss, 1990);
+    assert.equal(synced.take_profit, 2010);
+    assert.equal(synced.potential_loss_at_sl, -105);
+    assert.equal(synced.potential_profit_at_tp, 95);
     assert.equal(
       db.prepare('SELECT broker_symbol FROM symbol_mappings').get().broker_symbol,
       'XAUUSDm',

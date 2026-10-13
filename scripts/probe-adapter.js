@@ -66,6 +66,11 @@ try {
       dealCount: history.deal_count,
       symbols: [...new Set(history.trades.map((trade) => trade.broker_symbol))].sort(),
       closeReasons: [...new Set(history.trades.map((trade) => trade.close_reason))].sort(),
+      manualTradesWithProtectiveLevels: history.trades.filter((trade) => trade.close_reason === 'MANUAL' && (trade.stop_loss || trade.take_profit)).length,
+      manualTradePotentials: history.trades.filter((trade) => trade.close_reason === 'MANUAL').slice(-5).map((trade) => ({
+        ticket: trade.ticket_number, stopLoss: trade.stop_loss, takeProfit: trade.take_profit,
+        atStop: trade.potential_loss_at_sl, atTarget: trade.potential_profit_at_tp,
+      })),
       activePositions: positions.positions.length,
       pendingOrders: positions.pending_orders?.length || 0,
       chartSymbol,
