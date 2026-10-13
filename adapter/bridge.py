@@ -2,6 +2,7 @@ import argparse
 import json
 import math
 import os
+import re
 import signal
 import statistics
 import sys
@@ -45,6 +46,21 @@ def canonical_symbol(symbol):
 def iso_time(milliseconds, seconds):
     stamp = milliseconds / 1000 if milliseconds else seconds
     return datetime.fromtimestamp(stamp, timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def protected_level_from_close_comment(comment):
+    """Return (kind, price) when the broker marks a closed deal as [tp 123.45].
+
+    Some brokers (including the configured VTMarkets server) return zero for
+    historic order.sl/order.tp after a market position is closed, even though
+    the terminal History grid retains the values.  The completed deal comment
+    remains a broker-provided, read-only source for the level that actually
+    closed the position.
+    """
+    match = re.search(r"\[\s*(tp|sl)\s+([-+]?(?:\d+(?:\.\d*)?|\.\d+))\s*\]", comment or "", re.I)
+    if not match:
+        return None, None
+    return match.group(1).upper(), float(match.group(2))
 
 
 class Adapter:
@@ -166,6 +182,14 @@ class Adapter:
                     stop_loss = float(order.sl)
                 if float(getattr(order, "tp", 0.0) or 0.0) > 0:
                     take_profit = float(order.tp)
+            # VTMarkets clears historic order.sl/order.tp for market positions.
+            # Its close deal still records the executed protection level in a
+            # structured broker comment, e.g. "[tp 4178.02]".
+            commented_kind, commented_level = protected_level_from_close_comment(closing.comment)
+            if commented_kind == "SL" and stop_loss is None:
+                stop_loss = commented_level
+            elif commented_kind == "TP" and take_profit is None:
+                take_profit = commented_level
             order_type = mt5.ORDER_TYPE_BUY if opening.type == mt5.DEAL_TYPE_BUY else mt5.ORDER_TYPE_SELL
             recorded_costs = sum(
                 float(deal.commission) + float(deal.swap) + float(getattr(deal, "fee", 0.0))
