@@ -68,6 +68,7 @@ else
       bridge,
       () => engine.activeAccount?.id || null,
       (payload) => win?.webContents.send('price-alert', payload),
+      (payload) => win?.webContents.send('pending-order-alert', payload),
     );
     const dev = !app.isPackaged && process.argv.includes('--dev');
     const url = dev ? 'http://127.0.0.1:5173' : pathToFileURL(join(root, 'dist/index.html')).href;

@@ -44,6 +44,11 @@ contextBridge.exposeInMainWorld('journal', {
     ipcRenderer.on('price-alert', listener);
     return () => ipcRenderer.removeListener('price-alert', listener);
   },
+  onPendingOrderAlert: (callback) => {
+    const listener = (_, alert) => callback(alert);
+    ipcRenderer.on('pending-order-alert', listener);
+    return () => ipcRenderer.removeListener('pending-order-alert', listener);
+  },
   onJournalChanged: (callback) => {
     const listener = (_, change) => callback(change);
     ipcRenderer.on('journal:changed', listener);

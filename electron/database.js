@@ -11,6 +11,8 @@ CREATE TABLE IF NOT EXISTS daily_entries(id INTEGER PRIMARY KEY,account_id INTEG
 CREATE INDEX IF NOT EXISTS daily_entries_date ON daily_entries(entry_date DESC,account_id);
 CREATE TABLE IF NOT EXISTS price_alerts(id INTEGER PRIMARY KEY,account_id INTEGER NOT NULL REFERENCES accounts(id),standard_symbol TEXT NOT NULL,broker_symbol TEXT NOT NULL,target_price REAL NOT NULL CHECK(target_price>0),direction TEXT NOT NULL CHECK(direction IN ('above','below')),reference_price REAL NOT NULL,point_size REAL NOT NULL CHECK(point_size>0),status TEXT NOT NULL DEFAULT 'ARMED' CHECK(status IN ('ARMED','TRIGGERED','PAUSED')),created_at TEXT NOT NULL,triggered_at TEXT,trigger_price REAL);
 CREATE INDEX IF NOT EXISTS price_alerts_monitor ON price_alerts(account_id,status,broker_symbol);
+CREATE TABLE IF NOT EXISTS pending_order_alert_state(account_id INTEGER NOT NULL REFERENCES accounts(id),order_id TEXT NOT NULL,standard_symbol TEXT NOT NULL,broker_symbol TEXT NOT NULL,order_type TEXT NOT NULL,entry_price REAL NOT NULL,first_seen_at TEXT NOT NULL,last_seen_at TEXT NOT NULL,last_reminded_at TEXT,triggered_at TEXT,close_reminded_at TEXT,PRIMARY KEY(account_id,order_id));
+CREATE INDEX IF NOT EXISTS pending_order_alert_monitor ON pending_order_alert_state(account_id,last_seen_at);
 CREATE TABLE IF NOT EXISTS app_settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS capital_events(id INTEGER PRIMARY KEY,account_id INTEGER NOT NULL REFERENCES accounts(id),ticket_number TEXT NOT NULL,occurred_at TEXT NOT NULL,amount REAL NOT NULL,kind TEXT NOT NULL DEFAULT '',comment TEXT NOT NULL DEFAULT '',UNIQUE(account_id,ticket_number));
 CREATE INDEX IF NOT EXISTS capital_events_time ON capital_events(account_id,occurred_at);

@@ -379,6 +379,21 @@ class Adapter:
                 "expiration": iso_time(0, expiration) if expiration > int(order.time_setup) else None,
                 "comment": order.comment or "",
             })
+        # A pending ticket disappears from orders_get when its entry fills. Keep
+        # a small read-only history window so Meridian can distinguish a fill
+        # from a cancellation and notify the trader immediately.
+        recent_order_updates = []
+        history_start = datetime.now(timezone.utc) - timedelta(days=2)
+        for order in mt5.history_orders_get(history_start, datetime.now(timezone.utc)) or []:
+            if order.type not in order_names or not getattr(order, "position_id", 0):
+                continue
+            if order.state != mt5.ORDER_STATE_FILLED:
+                continue
+            recent_order_updates.append({
+                "order_id": str(order.ticket),
+                "position_id": str(order.position_id),
+                "filled_at": iso_time(getattr(order, "time_done_msc", 0), order.time_done),
+            })
         return {
             "login_id": str(account.login),
             "server_name": account.server,
@@ -387,6 +402,7 @@ class Adapter:
             "equity": float(account.equity),
             "positions": rows,
             "pending_orders": pending_rows,
+            "recent_order_updates": recent_order_updates,
             "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         }
 

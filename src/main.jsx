@@ -598,6 +598,11 @@ function App() {
     setToast(alert.message);
     void refresh();
   }), [data.alertMode]);
+  useEffect(() => window.journal?.onPendingOrderAlert((alert) => {
+    if (data.alertMode === 'voice') speakAlert(alert.message); else playSoftTone();
+    setToast(alert.message);
+    void refresh();
+  }), [data.alertMode]);
   useEffect(() => window.journal?.onJournalChanged((change) => {
     if (accountScope === 'active') setFilters((current) => ({ ...current, account: change.account_id, broker: undefined }));
     else void task(refresh);
