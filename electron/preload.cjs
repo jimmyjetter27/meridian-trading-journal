@@ -27,6 +27,7 @@ const channels = [
   'alerts:rearm',
   'alerts:preference',
   'alerts:email',
+  'telegram:configure',
   'trade:annotate',
 ];
 contextBridge.exposeInMainWorld('journal', {

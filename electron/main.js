@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, safeStorage } from 'electron';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { readFile, writeFile, stat } from 'node:fs/promises';
@@ -154,6 +154,7 @@ else
         signalJourneys: db.prepare('SELECT * FROM signal_journeys ORDER BY account_id').all(),
         priceAlerts: alerts.list(),
         alertMode: db.prepare("SELECT value FROM app_settings WHERE key='alert_mode'").get()?.value || 'tone',
+        telegramConfigured: Boolean(db.prepare("SELECT value FROM app_settings WHERE key='telegram_api_id'").get()?.value && db.prepare("SELECT value FROM app_settings WHERE key='telegram_api_hash'").get()?.value),
       };
     });
     handle(
@@ -670,6 +671,13 @@ else
     handle('alerts:email', (input) => {
       alerts.configureEmail(input);
       return true;
+    });
+    handle('telegram:configure', (input) => {
+      const values = z.object({ apiId: z.string().regex(/^\d+$/), apiHash: z.string().regex(/^[a-f0-9]{32}$/i) }).parse(input);
+      if (!safeStorage.isEncryptionAvailable()) throw Error('Windows secure storage is unavailable. Sign in to Windows and try again.');
+      db.prepare("INSERT INTO app_settings(key,value) VALUES('telegram_api_id',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(values.apiId);
+      db.prepare("INSERT INTO app_settings(key,value) VALUES('telegram_api_hash',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(safeStorage.encryptString(values.apiHash).toString('base64'));
+      return { configured: true };
     });
     bridge.on('status', (s) => {
       status = s;

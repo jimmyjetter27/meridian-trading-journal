@@ -1173,7 +1173,7 @@ function Settings({ data, active, task, refresh, importFile, report, setToast })
   return (
     <>
       <div className="tabs mb-6">
-        {['Journal', 'Accounts', 'Symbols', 'Bridge', 'Alerts'].map((s) => (
+        {['Journal', 'Accounts', 'Symbols', 'Bridge', 'Alerts', 'Telegram'].map((s) => (
           <button
             key={s}
             className={s === section ? 'tab-active' : ''}
@@ -1528,6 +1528,19 @@ function Settings({ data, active, task, refresh, importFile, report, setToast })
             </form>
           </details>
         </>
+      )}
+      {section === 'Telegram' && (
+        <section className="setting-block">
+          <h3>Telegram signal connection</h3>
+          <p className="muted my-3">Connect your own Telegram account locally to read selected signal posts. Meridian will never send messages, join groups, or place trades.</p>
+          <form className="form-grid" onSubmit={(e) => submit(e, 'telegram:configure', (f) => ({ apiId: f.apiId.trim(), apiHash: f.apiHash.trim() }))}>
+            <Field label="Telegram API ID" name="apiId" inputMode="numeric" pattern="[0-9]+" required />
+            <Field label="Telegram API hash" name="apiHash" type="password" pattern="[a-fA-F0-9]{32}" required />
+            <button className="primary self-end">Save local Telegram setup</button>
+          </form>
+          <p className="muted text-xs mt-4">Create these values at my.telegram.org/apps. The API hash is encrypted with Windows secure storage and is never included in journal exports.</p>
+          {data.telegramConfigured && <p className="notice mt-4">Telegram credentials are saved locally. Account sign-in and channel selection are the next step.</p>}
+        </section>
       )}
     </>
   );
