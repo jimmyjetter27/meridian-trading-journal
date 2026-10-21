@@ -61,7 +61,11 @@ else
     engine = new ExecutionEngine(db, bridge);
     adapter = new Mt5AdapterManager(bridge, root);
     const existingAccounts = publicAccounts(db);
-    if (existingAccounts.length === 1) engine.select(existingAccounts[0].id);
+    // Prefer the configured VTMarkets journal on launch. The automatic MT5
+    // account detector can still switch to whichever configured terminal is
+    // currently logged in.
+    const preferredAccount = existingAccounts.find((account) => /vtmarkets/i.test(account.broker_name)) || existingAccounts[0];
+    if (preferredAccount) engine.select(preferredAccount.id);
     db.prepare("INSERT OR IGNORE INTO app_settings(key,value) VALUES('alert_mode','tone')").run();
     alerts = new Alerts(
       db,
