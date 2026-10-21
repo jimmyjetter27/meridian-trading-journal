@@ -1540,6 +1540,15 @@ function Settings({ data, active, task, refresh, importFile, report, setToast })
           </form>
           <p className="muted text-xs mt-4">Create these values at my.telegram.org/apps. The API hash is encrypted with Windows secure storage and is never included in journal exports.</p>
           {data.telegramConfigured && <p className="notice mt-4">Telegram credentials are saved locally. Account sign-in and channel selection are the next step.</p>}
+          {data.telegramConfigured && <form className="form-grid mt-5" onSubmit={(e) => submit(e, 'telegram:begin', (f) => ({ phone: f.phone.trim() }))}>
+            <Field label="Telegram phone number" name="phone" type="tel" placeholder="+233…" required />
+            <button className="primary self-end">Send Telegram sign-in code</button>
+          </form>}
+          {data.telegramConfigured && <form className="form-grid mt-4" onSubmit={(e) => submit(e, 'telegram:verify', (f) => ({ phone: f.phone.trim(), code: f.code.trim() }))}>
+            <Field label="Phone number" name="phone" type="tel" placeholder="+233…" required />
+            <Field label="Telegram sign-in code" name="code" inputMode="numeric" required />
+            <button className="primary self-end">Connect Telegram</button>
+          </form>}
         </section>
       )}
     </>

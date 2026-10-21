@@ -28,6 +28,8 @@ const channels = [
   'alerts:preference',
   'alerts:email',
   'telegram:configure',
+  'telegram:begin',
+  'telegram:verify',
   'trade:annotate',
 ];
 contextBridge.exposeInMainWorld('journal', {

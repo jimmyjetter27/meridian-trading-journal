@@ -20,11 +20,12 @@ import { ExecutionEngine } from './execution.js';
 import { Alerts } from './alerts.js';
 import { diagnose } from './diagnostics.js';
 import { Mt5AdapterManager } from './mt5Adapter.js';
+import { TelegramConnector } from './telegram.js';
 import { syncMt5History } from './mt5Sync.js';
 import { calculatePeriodReturns } from './returns.js';
 import { applySignalJourney, parseSignalText, summarizeSignalAnalysis, validateSignalDate } from './signals.js';
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
-let db, win, engine, alerts;
+let db, win, engine, alerts, telegram;
 let restoring = false;
 let autoSyncTimer;
 let autoSyncBusy = false;
@@ -59,6 +60,7 @@ else
     for (const journey of db.prepare('SELECT account_id FROM signal_journeys').all())
       recalculateSignalJourney(journey.account_id);
     engine = new ExecutionEngine(db, bridge);
+    telegram = new TelegramConnector(db, safeStorage);
     adapter = new Mt5AdapterManager(bridge, root);
     const existingAccounts = publicAccounts(db);
     // Prefer the configured VTMarkets journal on launch. The automatic MT5
@@ -683,6 +685,8 @@ else
       db.prepare("INSERT INTO app_settings(key,value) VALUES('telegram_api_hash',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(safeStorage.encryptString(values.apiHash).toString('base64'));
       return { configured: true };
     });
+    handle('telegram:begin', (input) => telegram.begin(z.object({ phone: z.string().min(6).max(30) }).parse(input).phone));
+    handle('telegram:verify', (input) => telegram.verify(z.object({ phone: z.string().min(6).max(30), code: z.string().min(3).max(10) }).parse(input).phone, z.object({ phone: z.string().min(6).max(30), code: z.string().min(3).max(10) }).parse(input).code));
     bridge.on('status', (s) => {
       status = s;
       win?.webContents.send('bridge:status', s);
