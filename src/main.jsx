@@ -1156,6 +1156,10 @@ function Settings({ data, active, task, refresh, importFile, report, setToast })
   const account = accountMode === 'edit' ? active : null;
   const defaultTerminalPath = 'C:\\Program Files\\MetaTrader 5\\terminal64.exe';
   const [terminalPath, setTerminalPath] = useState(account?.terminal_path || defaultTerminalPath);
+  const [telegramDialogs, setTelegramDialogs] = useState([]);
+  const [telegramMessages, setTelegramMessages] = useState([]);
+  const [telegramChat, setTelegramChat] = useState('');
+  const [telegramHistoryCount, setTelegramHistoryCount] = useState(0);
   useEffect(() => {
     setTerminalPath(account?.terminal_path || defaultTerminalPath);
   }, [accountMode, active?.id, active?.terminal_path]);
@@ -1549,6 +1553,14 @@ function Settings({ data, active, task, refresh, importFile, report, setToast })
             <Field label="Telegram sign-in code" name="code" inputMode="numeric" required />
             <button className="primary self-end">Connect Telegram</button>
           </form>}
+          {data.telegramConfigured && <div className="mt-5">
+            <button type="button" onClick={() => task(async () => { const chats = await call('telegram:dialogs'); setTelegramDialogs(chats); setToast('Telegram chats loaded. Select Hilo Dominion Elite.'); })}>Load my Telegram chats</button>
+            {telegramDialogs.length > 0 && <Field label="Telegram channel or group"><select value={telegramChat} onChange={(e) => setTelegramChat(e.target.value)}><option value="">Select Hilo Dominion Elite</option>{telegramDialogs.map((chat) => <option key={chat.id} value={chat.id}>{chat.title}</option>)}</select></Field>}
+            {telegramChat && <button type="button" className="primary mt-3" onClick={() => task(async () => { setTelegramMessages(await call('telegram:messages', telegramChat)); })}>Show recent messages</button>}
+            {telegramChat && <button type="button" className="mt-3 ml-3" onClick={() => task(async () => { const history = await call('telegram:history', { id: telegramChat, since: '2021-08-01T00:00:00.000Z' }); setTelegramHistoryCount(history.length); setTelegramMessages(history.slice(-60)); setToast(`${history.length} Hilo messages loaded from 1 August 2021. Signal classification is next.`); })}>Load history from 1 Aug 2021</button>}
+            {telegramHistoryCount > 0 && <p className="notice mt-3">{telegramHistoryCount.toLocaleString()} messages loaded for the historical signal ledger.</p>}
+            {telegramMessages.length > 0 && <div className="setting-block mt-4"><h3>Recent messages</h3>{telegramMessages.map((message) => <article key={message.id} className="notice mt-3"><small>{message.date ? new Date(message.date).toLocaleString() : ''}</small><p>{message.text}</p></article>)}</div>}
+          </div>}
         </section>
       )}
     </>

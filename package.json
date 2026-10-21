@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "better-sqlite3": "^12.6.2",
+    "bufferutil": "^4.0.9",
     "csv-parse": "^7.0.2",
     "input": "^1.0.1",
     "lightweight-charts": "^5.2.1",
@@ -28,6 +29,7 @@
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "telegram": "^2.26.22",
+    "utf-8-validate": "^5.0.10",
     "ws": "^8.19.0",
     "zod": "^4.3.6"
   },

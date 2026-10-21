@@ -30,6 +30,9 @@ const channels = [
   'telegram:configure',
   'telegram:begin',
   'telegram:verify',
+  'telegram:dialogs',
+  'telegram:messages',
+  'telegram:history',
   'trade:annotate',
 ];
 contextBridge.exposeInMainWorld('journal', {

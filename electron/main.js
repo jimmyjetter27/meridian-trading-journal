@@ -426,7 +426,7 @@ else
         tp1_confirmed: parsed.tp1_confirmed,
         stop_confirmed: parsed.stop_confirmed,
         reported_entries: parsed.reported_entries,
-        entry_price: request.entry_price,
+        entry_price: request.entry_price ?? parsed.first_entry,
       }, undefined, 60000);
       if (String(result.login_id) !== String(account.login_id) || result.server_name !== account.server_name)
         throw Error('MT5 returned data for a different account');
@@ -453,7 +453,7 @@ else
         standard_symbol: parsed.standard_symbol, broker_symbol: mapping.broker_symbol, side: parsed.side,
         zone_low: parsed.zone_low, zone_high: parsed.zone_high, stop_loss: parsed.stop_loss,
         take_profit: parsed.take_profit, starting_balance: journey.starting_capital,
-        entry_price: request.entry_price ?? null,
+        entry_price: request.entry_price ?? parsed.first_entry,
         raw_setup: parsed.clean_setup_text, raw_outcome: request.outcome,
         result_json: JSON.stringify(analysis), now,
       });
@@ -687,6 +687,9 @@ else
     });
     handle('telegram:begin', (input) => telegram.begin(z.object({ phone: z.string().min(6).max(30) }).parse(input).phone));
     handle('telegram:verify', (input) => telegram.verify(z.object({ phone: z.string().min(6).max(30), code: z.string().min(3).max(10) }).parse(input).phone, z.object({ phone: z.string().min(6).max(30), code: z.string().min(3).max(10) }).parse(input).code));
+    handle('telegram:dialogs', () => telegram.dialogs());
+    handle('telegram:messages', (input) => telegram.messages(z.string().min(1).parse(input)));
+    handle('telegram:history', (input) => telegram.history(z.object({ id: z.string().min(1), since: z.string().datetime() }).parse(input).id, z.object({ id: z.string().min(1), since: z.string().datetime() }).parse(input).since));
     bridge.on('status', (s) => {
       status = s;
       win?.webContents.send('bridge:status', s);

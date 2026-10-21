@@ -49,6 +49,9 @@ export function parseSignalText(setupText, outcomeText = '', { requireHeader = t
     embedded_date: embeddedDate,
     side: zone[1].toUpperCase(),
     standard_symbol: zone[2].toUpperCase().replace(/[^A-Z0-9]/g, ''),
+    // Enter at the first edge reached when price moves into the zone: the
+    // lower edge for sells and the upper edge for buys.
+    first_entry: zone[1].toUpperCase() === 'BUY' ? Math.max(Number(zone[3]), Number(zone[4])) : Math.min(Number(zone[3]), Number(zone[4])),
     zone_low: Math.min(Number(zone[3]), Number(zone[4])),
     zone_high: Math.max(Number(zone[3]), Number(zone[4])),
     stop_loss: Number(stopLoss),
