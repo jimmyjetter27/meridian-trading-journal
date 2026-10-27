@@ -26,6 +26,20 @@ const moneyPairText = (value, currency, fx) => {
 function MoneyValue({ value, currency = 'USD', fx }) {
   return <>{money(value, currency)}{currency === 'USD' && fx && <small className="ghs-equivalent">{ghsMoney(Number(value || 0) * (Number(value) < 0 ? fx.ask : fx.bid))}</small>}</>;
 }
+const pieColors = ['#69dcc0', '#f1b45b', '#8d9cff', '#f17491', '#7ec9f5', '#ba8de8'];
+function PieCard({ title, values, empty = 'No data in this selection' }) {
+  const rows = Object.entries(values).filter(([, value]) => Number(value) > 0);
+  const total = rows.reduce((sum, [, value]) => sum + Number(value), 0);
+  if (!total) return <section className="panel pie-card"><h3>{title}</h3><p className="muted text-xs mt-4">{empty}</p></section>;
+  let offset = 0;
+  const segments = rows.map(([label, value], index) => {
+    const pct = Number(value) / total;
+    const dash = `${pct * 100} ${100 - pct * 100}`;
+    const segment = <circle key={label} cx="50" cy="50" r="38" fill="none" stroke={pieColors[index % pieColors.length]} strokeWidth="18" pathLength="100" strokeDasharray={dash} strokeDashoffset={-offset} transform="rotate(-90 50 50)" />;
+    offset += pct * 100; return segment;
+  });
+  return <section className="panel pie-card"><h3>{title}</h3><div className="pie-content"><svg viewBox="0 0 100 100" role="img" aria-label={title}>{segments}<text x="50" y="53" textAnchor="middle" className="pie-total">{total}</text></svg><div className="pie-legend">{rows.map(([label, value], index) => <div key={label}><i style={{ background: pieColors[index % pieColors.length] }} />{label}<b>{value} · {(Number(value) / total * 100).toFixed(0)}%</b></div>)}</div></div></section>;
+}
 function playSoftTone() {
   const AudioContext = window.AudioContext || window.webkitAudioContext;
   if (!AudioContext) return;
@@ -674,6 +688,14 @@ function App() {
   const points = curve
     .map((n, i) => `${(i / Math.max(curve.length - 1, 1)) * 900},${150 - ((n - lo) / range) * 125}`)
     .join(' ');
+  const pieCounts = (key, map = (value) => value) => data.trades.reduce((counts, trade) => {
+    const label = map(trade[key]); counts[label] = (counts[label] || 0) + 1; return counts;
+  }, {});
+  const winLoss = data.trades.reduce((counts, trade) => { const label = trade.net_pnl >= 0 ? 'Wins' : 'Losses'; counts[label]++; return counts; }, {});
+  const tradeSides = pieCounts('type');
+  const symbols = pieCounts('standard_symbol');
+  const commodities = data.trades.reduce((counts, trade) => { const label = /^(XAUUSD|XAGUSD|USOIL|UKOIL|XTIUSD)$/i.test(trade.standard_symbol) ? 'Commodities' : 'Other markets'; counts[label] = (counts[label] || 0) + 1; return counts; }, {});
+  const cashMovement = data.cashFlows.reduce((counts, flow) => { const label = flow.amount >= 0 ? 'Deposits' : 'Withdrawals'; counts[label] = (counts[label] || 0) + 1; return counts; }, {});
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -887,6 +909,13 @@ function App() {
                 </p>
               )}
               {tab === 'Overview' && (<>
+                <div className="pie-grid">
+                  <PieCard title="Wins vs losses" values={winLoss} />
+                  <PieCard title="Symbols" values={symbols} />
+                  <PieCard title="Trades" values={tradeSides} />
+                  <PieCard title="Commodity trades" values={commodities} />
+                  <PieCard title="Deposits vs withdrawals" values={cashMovement} />
+                </div>
                 <section className="panel chart-panel">
                   <div className="flex justify-between items-start">
                     <div>
