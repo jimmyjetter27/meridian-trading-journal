@@ -951,5 +951,13 @@ tbody tr:hover {
 .pie-legend div { display:grid; grid-template-columns:9px 1fr auto; gap:6px; align-items:center; margin:7px 0; }
 .pie-legend i { width:9px; height:9px; border-radius:50%; }
 .pie-legend b { color:#aeb9c7; font-weight:600; white-space:nowrap; }
+.bias-card > strong { display:block; margin:14px 0 2px; font-size:20px; }
+.bias-card > small { color:#91a0b1; }
+.bias-bars { margin-top:14px; display:grid; gap:8px; }
+.bias-bars div { display:grid; grid-template-columns:35px 1fr 42px; align-items:center; gap:7px; font-size:11px; }
+.bias-bars i { height:7px; background:#1c2a38; border-radius:8px; overflow:hidden; }
+.bias-bars b { display:block; height:100%; background:#69dcc0; border-radius:8px; }
+.bias-bars div:nth-child(2) b { background:#f17491; }
+.bias-bars em { font-style:normal; color:#aeb9c7; text-align:right; }
 @media (max-width: 1100px) { .pie-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 @media (max-width: 650px) { .pie-grid { grid-template-columns:1fr; } }

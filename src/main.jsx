@@ -40,6 +40,11 @@ function PieCard({ title, values, empty = 'No data in this selection' }) {
   });
   return <section className="panel pie-card"><h3>{title}</h3><div className="pie-content"><svg viewBox="0 0 100 100" role="img" aria-label={title}>{segments}<text x="50" y="53" textAnchor="middle" className="pie-total">{total}</text></svg><div className="pie-legend">{rows.map(([label, value], index) => <div key={label}><i style={{ background: pieColors[index % pieColors.length] }} />{label}<b>{value} · {(Number(value) / total * 100).toFixed(0)}%</b></div>)}</div></div></section>;
 }
+function BiasCard({ trades }) {
+  const sides = ['BUY', 'SELL'].map((side) => { const rows = trades.filter((trade) => trade.type === side); return { side, total: rows.length, wins: rows.filter((trade) => trade.net_pnl > 0).length, rate: rows.length ? rows.filter((trade) => trade.net_pnl > 0).length / rows.length * 100 : 0 }; });
+  const leader = [...sides].filter((side) => side.total).sort((a, b) => b.rate - a.rate)[0];
+  return <section className="panel pie-card bias-card"><h3>Most successful bias</h3>{leader ? <><strong className={leader.side === 'BUY' ? 'positive' : 'negative'}>{leader.side} · {leader.rate.toFixed(1)}%</strong><small>{leader.wins} wins from {leader.total} trades</small><div className="bias-bars">{sides.map((side) => <div key={side.side}><span>{side.side}</span><i><b style={{ width: `${side.rate}%` }} /></i><em>{side.rate.toFixed(1)}%</em></div>)}</div></> : <p className="muted text-xs mt-4">No directional trades in this selection.</p>}</section>;
+}
 function playSoftTone() {
   const AudioContext = window.AudioContext || window.webkitAudioContext;
   if (!AudioContext) return;
@@ -910,6 +915,7 @@ function App() {
               )}
               {tab === 'Overview' && (<>
                 <div className="pie-grid">
+                  <BiasCard trades={data.trades} />
                   <PieCard title="Wins vs losses" values={winLoss} />
                   <PieCard title="Symbols" values={symbols} />
                   <PieCard title="Trades" values={tradeSides} />
